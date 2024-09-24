@@ -24,7 +24,7 @@ class DEM(dict):
         self._cache_file = cache_file
         if clear_cache and os.path.exists(cache_file):
             os.remove(cache_file)
-        if os.path.exists(cache_file):
+        if cache_file is not None and os.path.exists(cache_file):
             self.load_cache()
 
     def load_cache(self):

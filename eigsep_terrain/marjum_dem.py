@@ -1,5 +1,6 @@
 import os
 import glob
+import numpy as np
 from urllib.request import urlretrieve
 
 from .data import DATA_PATH
