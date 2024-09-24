@@ -2,7 +2,7 @@
 
 import numpy as np
 import glob
-import PIL
+import PIL.Image
 import os
 import pyuvdata
 import xmltodict
@@ -38,9 +38,10 @@ class DEM(dict):
 
     def save_cache(self):
         '''Cache DEM data in npz file.'''
-        np.savez(self._cache_file, dem=self.data, res=self.res,
-                files=self.files, survey_offset=self.survey_offset,
-                **self.map_crd)
+        if self._cache_file is not None:
+            np.savez(self._cache_file, dem=self.data, res=self.res,
+                     files=self.files, survey_offset=self.survey_offset,
+                     **self.map_crd)
 
     def load_tif(self, files, survey_offset=SURVEY_OFFSET):
         _dem = np.hstack([np.vstack([np.array(PIL.Image.open(f),
