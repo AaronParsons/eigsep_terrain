@@ -3,7 +3,7 @@ import copy
 import os
 import pytest
 import numpy as np
-from eigsep_terrain.utils import calc_az_bin_range
+from eigsep_terrain.utils import calc_az_bin_range, az_bin
 
 
 class TestUtils:
