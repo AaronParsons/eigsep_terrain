@@ -19,32 +19,28 @@ XML_CRD_KEYWORDS = ('eastbc', 'westbc', 'northbc', 'southbc')
 class DEM(dict):
     '''Class for interacting with Digital Elevation Model data.'''
     
-    def __init__(self, save_file=SAVE_FILE, glob_str=GLOB_STR,
-                 xml_file=XML_FILE, survey_offset=SURVEY_OFFSET,
-                 clear_cache=False):
-        if clear_cache and os.path.exists(save_file):
-            os.remove(save_file)
-        if os.path.exists(save_file):
-            self.load_npz(save_file)
-        else:
-            files = np.array(sorted(glob.glob(glob_str))).reshape((4, 4))[:-1]
-            self.load_tif(files, survey_offset=survey_offset)
-            self.load_xml(xml_file)
-            self.save_npz(save_file)
+    def __init__(self, cache_file=None, clear_cache=False):
+#glob_str=GLOB_STR, xml_file=XML_FILE, survey_offset=SURVEY_OFFSET,
+        self._cache_file = cache_file
+        if clear_cache and os.path.exists(cache_file):
+            os.remove(cache_file)
+        if os.path.exists(cache_file):
+            self.load_cache()
 
-    def load_npz(self, filename):
+    def load_cache(self):
         '''Retrieve cached DEM data from npz file.'''
-        npz = np.load(filename)
+        npz = np.load(self._cache_file)
         self.files = npz['files']
         self.res = npz['res']
         self.data = npz['dem']
         self.map_crd = {k: npz[k] for k in XML_CRD_KEYWORDS}
         self.survey_offset = npz['survey_offset']
 
-    def save_npz(self, filename):
+    def save_cache(self):
         '''Cache DEM data in npz file.'''
-        np.savez(filename, dem=self.data, res=self.res, files=self.files,
-                 survey_offset=self.survey_offset, **self.map_crd)
+        np.savez(self._cache_file, dem=self.data, res=self.res,
+                files=self.files, survey_offset=self.survey_offset,
+                **self.map_crd)
 
     def load_tif(self, files, survey_offset=SURVEY_OFFSET):
         _dem = np.hstack([np.vstack([np.array(PIL.Image.open(f),

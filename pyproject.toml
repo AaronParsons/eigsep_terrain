@@ -4,3 +4,24 @@ build-backend = "setuptools.build_meta"
 
 [tool.black]
 line-length = 79
+
+[project]
+name = "eigsep_terrain"
+description = "Digital Elevation Model tools for EIGSEP"
+license = {text = "MIT"}
+authors = [
+    {name="Aaron Parsons"},
+]
+readme = "README.md"
+requires-python = ">=3.9"
+dynamic = [
+    "version",
+]
+dependencies = [
+    "numpy",
+    "xmltodict",
+    "Pillow",
+    "pyuvdata",
+]
+
+
