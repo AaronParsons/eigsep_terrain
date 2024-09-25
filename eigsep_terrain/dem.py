@@ -1,18 +1,11 @@
 '''Tools for dealing with digital elevation models.'''
 
 import numpy as np
-import glob
 import PIL.Image
 import os
 import pyuvdata
 import xmltodict
 from .utils import *
-
-SAVE_FILE = 'marjum_dem.npz'
-GLOB_STR = './marjum_tiffs/USGS_OPR_UT_WestEast_B22_*.tif'
-# https://thor-f5.er.usgs.gov/ngtoc/metadata/waf/elevation/opr_dem/geotiff/UT_WestEast_7_B22/USGS_OPR_UT_WestEast_B22_12STJ9245.xml
-XML_FILE = './marjum_tiffs/USGS_OPR_UT_WestEast_B22_12STJ9145.xml'
-SURVEY_OFFSET = np.array([-11, 36, 3])
 
 XML_CRD_KEYWORDS = ('eastbc', 'westbc', 'northbc', 'southbc')
 
@@ -20,7 +13,6 @@ class DEM(dict):
     '''Class for interacting with Digital Elevation Model data.'''
     
     def __init__(self, cache_file=None, clear_cache=False):
-#glob_str=GLOB_STR, xml_file=XML_FILE, survey_offset=SURVEY_OFFSET,
         self._cache_file = cache_file
         if clear_cache and os.path.exists(cache_file):
             os.remove(cache_file)
@@ -43,7 +35,7 @@ class DEM(dict):
                      files=self.files, survey_offset=self.survey_offset,
                      **self.map_crd)
 
-    def load_tif(self, files, survey_offset=SURVEY_OFFSET):
+    def load_tif(self, files, survey_offset=np.array([0, 0,0])):
         _dem = np.hstack([np.vstack([np.array(PIL.Image.open(f),
                                               dtype='int32')
                                      for f in files[i][::-1]])
@@ -123,6 +115,51 @@ class DEM(dict):
             E, N = _E, _N
         return E * self.res, N * self.res, U
 
+    def find_anchors(self, e0, n0, u0, n_anchors=2, r_anchor_max=300,
+                     min_angle=np.deg2rad(20), n_az_bins=240):
+        '''Find opposing anchor positions.
+        r_anchor_max: meters, min_angle: radians.'''
+        # Find anchor points
+        erng = (e0 - r_anchor_max, e0 + r_anchor_max)
+        nrng = (n0 - r_anchor_max, n0 + r_anchor_max)
+        E, N, U = self.get_tile(erng, nrng, mesh=False)
+        rdist = np.sqrt((E[None, :] - e0)**2 + (N[:, None] - n0)**2)
+        cone = u0 + np.tan(min_angle) * rdist
+        inds = (U - cone > 0)
+        rmin = r_anchor_max * np.ones(n_az_bins)
+        rmax = np.zeros(n_az_bins)
+        b = az_bin(E - e0, N - n0, n_az_bins)
+        for _r, _b in zip(rdist[inds], b[inds]):
+            rmin[_b % n_az_bins] = min(rmin[_b % n_az_bins], _r)
+            rmax[_b % n_az_bins] = max(rmax[_b % n_az_bins], _r)
+        # Assign inf to areas that don't meet anchor length requirements
+        rmin = np.where(rmin >= r_anchor_max, np.Inf, rmin)
+        # Fold to enforce anchors being on opposite sides,
+        # then minimize total anchor length
+        rmin.shape = (n_anchors, -1)
+        rmax.shape = (n_anchors, -1)
+        rtot = np.sum(rmin, axis=0)
+        bmin = np.argmin(rtot)
+        r_anchors = rmin[:, bmin]
+        az_min = bmin * 2 * np.pi / n_az_bins
+        az_anchors = az_min + 2 * np.pi / n_anchors * np.arange(n_anchors)
+        anchors_e = e0 + r_anchors * np.sin(az_anchors)
+        anchors_n = n0 + r_anchors * np.cos(az_anchors)
+        # find boundary
+        valid = np.where(rtot < n_anchors * r_anchor_max)[0]
+        az_valid = valid * 2 * np.pi / n_az_bins
+        boundary = []
+        for a in range(n_anchors):
+            bound_min = [(e0 + r * np.sin(az), n0 + r * np.cos(az))
+                         for r, az in zip(rmin[a, valid],
+                                     az_valid + a * 2 * np.pi / n_anchors)]
+            bound_max = [(e0 + r * np.sin(az), n0 + r * np.cos(az))
+                         for r, az in zip(rmax[a, valid],
+                                     az_valid + a * 2 * np.pi / n_anchors)]
+            boundary.append(bound_min + bound_max[::-1])
+
+        return list(zip(anchors_e, anchors_n)), np.array(boundary)
+
     def build_maxpool_pyramid(self, data=None, factor=4):
         '''Return a list of (2D array, factor) pairs, each downsampled
         along 2 dimensions by the specified factor and maxpooled.'''
@@ -162,16 +199,17 @@ class DEM(dict):
             if crds is None:
                 crds = np.zeros([2, hangles.size], dtype=int)
             else:
+                crds_px = np.around(crds / self.res).astype(int)
                 _U, _f = imp[0]
                 e_edges, n_edges = self.get_en(edges=True, decimate=_f)
-                n_edges = n_edges[crds[0]]
-                e_edges = e_edges[crds[1]]
+                n_edges = n_edges[crds_px[0]]
+                e_edges = e_edges[crds_px[1]]
                 r_min = np.sqrt((e_edges - e0)**2 + (n_edges - n0)**2)
                 az = np.arctan2(e_edges - e0, n_edges - n0)
                 az = np.where(az < 0, 2 * np.pi + az, az)
                 b = np.around(az / (2 * np.pi / n_az)).astype(int)
-                hangles[b] = np.arctan2(_U[crds[0], crds[1]] - u0,
-                                               r_min)
+                hangles[b % n_az] = np.arctan2(_U[crds_px[0], crds_px[1]]
+                                               - u0, r_min)
             U, f = imp[-1]
             e_edges, n_edges = self.get_en(edges=True, decimate=f)
             _ni, _ei = 0, 0
@@ -204,8 +242,8 @@ class DEM(dict):
                 # base case
                 for s in slices:
                     update = (hangles[s] < h)
-                    crds[0, s] = np.where(update, _ni + ni, crds[0, s])
-                    crds[1, s] = np.where(update, _ei + ei, crds[1, s])
+                    crds[0,s] = np.where(update,self.res*(_ni+ni),crds[0,s])
+                    crds[1,s] = np.where(update,self.res*(_ei+ei),crds[1,s])
                     # sets to highest value
                     hangles[s] = np.where(update, h,
                                                   hangles[s])
