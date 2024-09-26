@@ -24,4 +24,5 @@ dependencies = [
     "pyuvdata",
 ]
 
-
+[tool.setuptools]
+packages = ["eigsep_terrain"]

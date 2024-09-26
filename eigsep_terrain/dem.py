@@ -106,23 +106,25 @@ class DEM(dict):
         else:
             return _E * self.res, _N * self.res
             
-    def get_tile(self, erng_m=None, nrng_m=None, mesh=True):
-        _E, _N = self.get_en(erng_m, nrng_m, return_px=True)
-        U = self.data[_N[0]:_N[-1]+1, _E[0]:_E[-1]+1]
+    def get_tile(self, erng_m=None, nrng_m=None, mesh=True, decimate=1):
+        _E, _N = self.get_en(erng_m, nrng_m,
+                             return_px=True, decimate=decimate)
+        U = self.data[_N][:, _E]
         if mesh:
             E, N = np.meshgrid(_E, _N)
         else:
             E, N = _E, _N
         return E * self.res, N * self.res, U
 
-    def find_anchors(self, e0, n0, u0, n_anchors=2, r_anchor_max=300,
+    def find_anchors(self, e0, n0, u0, decimate=1,
+                     n_anchors=2, r_anchor_max=300,
                      min_angle=np.deg2rad(20), n_az_bins=240):
         '''Find opposing anchor positions.
         r_anchor_max: meters, min_angle: radians.'''
         # Find anchor points
         erng = (e0 - r_anchor_max, e0 + r_anchor_max)
         nrng = (n0 - r_anchor_max, n0 + r_anchor_max)
-        E, N, U = self.get_tile(erng, nrng, mesh=False)
+        E, N, U = self.get_tile(erng, nrng, mesh=False, decimate=decimate)
         rdist = np.sqrt((E[None, :] - e0)**2 + (N[:, None] - n0)**2)
         cone = u0 + np.tan(min_angle) * rdist
         inds = (U - cone > 0)
