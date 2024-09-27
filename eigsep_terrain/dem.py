@@ -66,8 +66,10 @@ class DEM(dict):
                 longitude=self.map_crd['westbc'], altitude=-alt)
         return enu - self.survey_offset
 
-    def m2px(self, *args):
-        px = tuple(np.around(m / self.res).astype(int) for m in args)
+    def m2px(self, *args, res=None):
+        if res is None:
+            res = self.res
+        px = tuple(np.around(m / res).astype(int) for m in args)
         return px
         
     def interp_alt(self, e_m, n_m, return_vec=False):
@@ -116,7 +118,27 @@ class DEM(dict):
             E, N = _E, _N
         return E * self.res, N * self.res, U
 
-    def find_anchors(self, e0, n0, u0, decimate=1,
+    def zone_of_avoidance_height(self, e_m, n_m, r_zoa=100, decimate=1):
+        '''Return the height needed to enforce all terrain is
+        a distance > r_zoa away.'''
+        E, N, U = self.get_tile(mesh=False, decimate=decimate)
+        res = self.res * decimate
+        k = np.around(r_zoa / res).astype(int)
+        dr = np.arange(-k, k+1) * res
+        rs2 = dr[:, None]**2 + dr[None, :]**2
+        root = np.sqrt((r_zoa**2 - rs2).clip(0))
+        e_px, n_px = self.m2px(e_m, n_m)
+        h = np.zeros_like(e_m)
+        for i in range(e_px.size):
+            ei, ni = e_px[i], n_px[i]
+            if ni - k < 0 or ei - k < 0:
+                continue
+            if ni + k + 1 > U.shape[0] or ei + k + 1 > U.shape[1]:
+                continue
+            h[i] = np.max(U[ni-k:ni+k+1, ei-k:ei+k+1] + root) - U[ni, ei]
+        return h
+
+    def find_anchors(self, e0, n0, u0, decimate=1, boundary=False,
                      n_anchors=2, r_anchor_max=300,
                      min_angle=np.deg2rad(20), n_az_bins=240):
         '''Find opposing anchor positions.
@@ -128,6 +150,8 @@ class DEM(dict):
         rdist = np.sqrt((E[None, :] - e0)**2 + (N[:, None] - n0)**2)
         cone = u0 + np.tan(min_angle) * rdist
         inds = (U - cone > 0)
+        if not np.any(inds):
+            return [], [] if boundary else []
         rmin = r_anchor_max * np.ones(n_az_bins)
         rmax = np.zeros(n_az_bins)
         b = az_bin(E - e0, N - n0, n_az_bins)
@@ -147,6 +171,8 @@ class DEM(dict):
         az_anchors = az_min + 2 * np.pi / n_anchors * np.arange(n_anchors)
         anchors_e = e0 + r_anchors * np.sin(az_anchors)
         anchors_n = n0 + r_anchors * np.cos(az_anchors)
+        if not boundary:
+            return list(zip(anchors_e, anchors_n))
         # find boundary
         valid = np.where(rtot < n_anchors * r_anchor_max)[0]
         az_valid = valid * 2 * np.pi / n_az_bins
@@ -159,7 +185,6 @@ class DEM(dict):
                          for r, az in zip(rmax[a, valid],
                                      az_valid + a * 2 * np.pi / n_anchors)]
             boundary.append(bound_min + bound_max[::-1])
-
         return list(zip(anchors_e, anchors_n)), np.array(boundary)
 
     def build_maxpool_pyramid(self, data=None, factor=4):
