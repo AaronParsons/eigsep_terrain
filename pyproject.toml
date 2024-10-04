@@ -22,6 +22,8 @@ dependencies = [
     "xmltodict",
     "Pillow",
     "pyuvdata",
+    "tqdm",
+    "linsolve",
 ]
 
 [tool.setuptools]

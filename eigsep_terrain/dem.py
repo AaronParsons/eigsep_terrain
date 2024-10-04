@@ -208,35 +208,18 @@ class DEM(dict):
                             np.zeros_like(pool_data[:,:1])], axis=1)
         if r0 > 0:
             # pad out fractional pixel on boundary
-            pool_data = np.concatenate([pool_data,
-                            np.zeros_like(pool_data[:1])], axis=0)
-        answer += [(d, factor * f) for (d, f) in
-                    self.build_maxpool_pyramid(data=pool_data,
-                                               factor=factor)]
+            pool_data = np.concatenate([pool_data, np.zeros_like(pool_data[:1])], axis=0)
+        answer += [(d, factor * f) for (d, f) in self.build_maxpool_pyramid(data=pool_data, factor=factor)]
         return answer
 
     def calc_horizon(self, e0, n0, u0, n_az=256, imp=None, f_prev=None,
-                     ei_off=None, ni_off=None, crds=None,
-                     hangles=None):
+                     ei_off=None, ni_off=None, crds=None, hangles=None):
         if imp is None:
             # top case
             imp = self.build_maxpool_pyramid()
             if hangles is None:
                 hangles = np.zeros(n_az)
-            if crds is None:
-                crds = np.zeros([2, hangles.size], dtype=int)
-            else:
-                crds_px = np.around(crds / self.res).astype(int)
-                _U, _f = imp[0]
-                e_edges, n_edges = self.get_en(edges=True, decimate=_f)
-                n_edges = n_edges[crds_px[0]]
-                e_edges = e_edges[crds_px[1]]
-                r_min = np.sqrt((e_edges - e0)**2 + (n_edges - n0)**2)
-                az = np.arctan2(e_edges - e0, n_edges - n0)
-                az = np.where(az < 0, 2 * np.pi + az, az)
-                b = np.around(az / (2 * np.pi / n_az)).astype(int)
-                hangles[b % n_az] = np.arctan2(_U[crds_px[0], crds_px[1]]
-                                               - u0, r_min)
+            crds = np.zeros([2, hangles.size], dtype=int)
             U, f = imp[-1]
             e_edges, n_edges = self.get_en(edges=True, decimate=f)
             _ni, _ei = 0, 0
@@ -253,8 +236,7 @@ class DEM(dict):
         az_min, az_max = calc_az_bin_range(e_edges, n_edges, e0, n0, n_az)
         hor_ang = np.arctan2(U - u0, r_min)
         # process in order of maximum possible horizon angle first
-        n_pxs, e_pxs = np.unravel_index(np.argsort(-hor_ang, axis=None),
-                                        r_min.shape)
+        n_pxs, e_pxs = np.unravel_index(np.argsort(-hor_ang, axis=None), r_min.shape)
         for cnt, (ni, ei) in enumerate(zip(n_pxs, e_pxs)):
             bmin = az_min[ni, ei]
             bmax = az_max[ni, ei]
@@ -269,13 +251,11 @@ class DEM(dict):
                 # base case
                 for s in slices:
                     update = (hangles[s] < h)
-                    crds[0,s] = np.where(update,self.res*(_ni+ni),crds[0,s])
-                    crds[1,s] = np.where(update,self.res*(_ei+ei),crds[1,s])
+                    crds[0,s] = np.where(update, self.res*(_ni+ni), crds[0,s])
+                    crds[1,s] = np.where(update, self.res*(_ei+ei), crds[1,s])
                     # sets to highest value
-                    hangles[s] = np.where(update, h,
-                                                  hangles[s])
-            elif np.any(np.concatenate([hangles[s] < h
-                                        for s in slices])):
+                    hangles[s] = np.where(update, h, hangles[s])
+            elif np.any(np.concatenate([hangles[s] < h for s in slices])):
                 # need to recursively process at higher resolution
                 hangles, crds = self.calc_horizon(e0, n0, u0,
                                         n_az=n_az, imp=imp[:-1], f_prev=f,
