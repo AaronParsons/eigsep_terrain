@@ -1,8 +1,21 @@
 '''Utility functions for calculating distance and azimuth angles.'''
 
 import numpy as np
+from scipy.constants import c as C
 
 R_earth = 6378e3 # m
+
+def distance(a, b):
+    '''Return distance from A to B.'''
+    return np.linalg.norm(b - a)
+
+def altitude(a, b):
+    '''Return altitude of B relative to A, assuming ENU coordinates.'''
+    return b[-1] - a[-1]
+
+def azimuth(a, b):
+    '''Return azimuthal angle [rad] of B viewed from A, assuming ENU coordinates.'''
+    return np.arctan2(b[0] - a[0], b[1] - a[1])
 
 def az_bin(e, n, n_az):
     '''Calculate azimuthal angle and round to nearest bin.'''
@@ -150,8 +163,72 @@ def calc_rmin(e_edges, n_edges, e0, n0):
         
     return np.sqrt(dn[:, None]**2 + de[None, :]**2)
 
+def pixel_delay_attenuation(radius_m, delta_freq):
+    '''Calculate attenuation of high-delay reflected signals by the expected
+    [tophat] bandpass width [Hz].'''
+    tau_max = 1 / delta_freq  # effective width of a bandpass in delay
+    radius_max = tau_max * C  # distance corresponding to maximum delay at speed of light
+    attenuation = np.sinc(radius_m / radius_max)  # uses sinc as FT of tophat
+    return attenuation
+
+def pixel_coherence_angle_attenuation(radius_m, freq, nside):
+    '''Calculate the expected attenuation arising from incoherence in different
+    coherence patches within a HealPix pixel [with resolution defined by nside]
+    at distance radius_m [m] scattering signals out of phase with each other
+    at the given frequency [Hz].'''
+    wavelen_m = C / freq
+    omega_px = 4 * np.pi / (12 * nside**2)  # steradians
+    area_m = omega_px * radius_m**2  # assumes small angles
+    n_coherence_patches = area_m / wavelen_m**2  # number of incoherent scattering patches
+    attenuation = 1 / np.sqrt(n_coherence_patches)  # assumes random incoherent scattering
+    return attenuation
+
 def horizon_angle_to_distance(angles, alt):
     '''Given an angle above the horizon (radians) and altitude (m) compute
     a visibility distance (m) accounting for earth curvature.'''
     th3 = np.arcsin(R_earth * np.sin(np.pi/2 + angles) / (R_earth + alt))
     return R_earth * (np.pi/2 - angles - th3)
+
+def conductivity_from_resistivity(resistivity_ohm_m):
+    '''Return the conductivity of a material given resistivity [Ohm m].'''
+    return 1 / (resisitivity_ohm_m * 1.113e-12 * 100)
+
+def permittivity_from_conductivity(conductivity, freqs):
+    '''Return the electromagnetic permittivity given a conductivity and a frequency [Hz].'''
+    omega = 2 * np.pi * freqs  # Hz
+    eta = np.sqrt(1 + 1j * 4 * np.pi * conductivity / omega)
+    return eta
+
+def reflection_coefficient(eta, eta0=1):
+    '''Return the reflection coefficient crossing from eta0 to eta [permittivity].'''
+    return np.power((eta0 - eta) / (eta0 + eta), 2)
+
+def are_points_in_polygon(vertices, points):
+    """
+    Determine if multiple points are inside a polygon using the ray-casting algorithm.
+
+    Parameters:
+    vertices (numpy.ndarray): A 2D array of shape (n, 2) representing the polygon vertices.
+    points (numpy.ndarray): A 2D array of shape (m, 2) representing the points to be tested.
+
+    Returns:
+    numpy.ndarray: A boolean array of shape (m,) where each element indicates if the point is inside the polygon.
+    """
+    x_vertices, y_vertices = vertices
+    x_points, y_points = points
+
+    n = vertices.shape[1]
+    inside = np.zeros(points.shape[1:], dtype=bool)
+
+    # Vectorized ray-casting logic
+    for i in range(n):
+        j = (i - 1) % n
+        xi, yi = x_vertices[i], y_vertices[i]
+        xj, yj = x_vertices[j], y_vertices[j]
+        # Check if the ray crosses the edge
+        intersect = ((yi > y_points) != (yj > y_points)) & (
+            x_points < (xj - xi) * (y_points - yi) / (yj - yi) + xi
+        )
+
+        inside ^= intersect  # Toggle inside state
+    return inside
