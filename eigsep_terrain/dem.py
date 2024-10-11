@@ -5,6 +5,7 @@ import PIL.Image
 import os
 import pyuvdata
 import xmltodict
+import healpy
 from .utils import *
 
 XML_CRD_KEYWORDS = ('eastbc', 'westbc', 'northbc', 'southbc')
@@ -125,8 +126,7 @@ class DEM(dict):
             return _E * self.res, _N * self.res
             
     def get_tile(self, erng_m=None, nrng_m=None, mesh=True, decimate=1):
-        _E, _N = self.get_en(erng_m, nrng_m,
-                             return_px=True, decimate=decimate)
+        _E, _N = self.get_en(erng_m, nrng_m, return_px=True, decimate=decimate)
         U = self.data[_N][:, _E]
         if mesh:
             E, N = np.meshgrid(_E, _N)
@@ -281,3 +281,50 @@ class DEM(dict):
                 # can skip this pixel
                 pass
         return hangles, crds
+
+    def ray_trace_distances(self, start_point, nside, delta_r_m=1,
+                            r_max=None, max_horizon_ang_deg=45, dtype='float32'):
+        '''Return the distance along a HealPix grid of specified nside from a
+        ENU starting point until a ray intersects the terrain, in steps of 
+        delta_r_m [m], out to a specified r_max_m (or map edge, if None).
+        Don't bother checking above the specified max_horizon_ang_deg [deg],
+        as these points are assumed not to intersect terrain. Returns distance
+        [m] in HealPix order, with non-intersecting points set to NaN.'''
+        E, N = self.get_en()
+        if r_max is None:
+            r_max = 0
+            for e_ind in (0, -1):
+                for n_ind in (0, -1):
+                    r_max = max([r_max, distance(start_point, np.array([E[e_ind], N[n_ind], self.data[n_ind, e_ind]]))])
+        max_iter = np.ceil(r_max / delta_r_m).astype(int)
+        npix = healpy.nside2npix(nside)
+        px = np.arange(npix)
+        dr_vec = (delta_r_m * np.array(healpy.pix2vec(nside, px))).astype(dtype)
+        th, _ = healpy.pix2ang(nside, px)
+        r = delta_r_m * np.ones(npix, dtype=dtype)
+        tracing = th > np.deg2rad(max_horizon_ang_deg)
+        inds = np.where(tracing)[0]
+        r[~tracing] = np.nan
+        points_m = start_point[:, None] + dr_vec[:, inds]
+        for i in range(2, max_iter):
+            u_m = self.interp_alt(points_m[0], points_m[1])
+            # prune to points that are above ground
+            tracing = (points_m[2] > u_m)
+            inds = inds[tracing]
+            if inds.size == 0:
+                break
+            # take a step along the ray
+            r[inds] = i * delta_r_m
+            points_m = points_m[:, tracing] + dr_vec[:, inds]
+            # check if out of bounds
+            tracing = np.logical_and(E[0] <= points_m[0], points_m[0] <= E[-1])
+            tracing &= np.logical_and(N[0] <= points_m[1], points_m[1] <= N[-1])
+            r[inds[~tracing]] = np.nan  # set newly out-of-bounds rays to nan
+            # prune to points that are in bounds
+            inds = inds[tracing]
+            points_m = points_m[:, tracing]
+            if inds.size == 0:
+                break
+        # Any remaining active pixels should be set to nan
+        r[inds] = np.nan
+        return r
