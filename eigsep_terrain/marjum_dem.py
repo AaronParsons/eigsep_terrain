@@ -45,7 +45,7 @@ class MarjumDEM(DEM):
                  xml_file=None, tif_files=None,
                  survey_offset=SURVEY_OFFSET, verbose=True):
         DEM.__init__(self, cache_file=cache_file, clear_cache=clear_cache)
-        if self._cache_file == None:
+        if self._cache_file == None or not os.path.exists(self._cache_file):
             xml_file = get_xml_file(verbose=verbose)
             tif_files = get_tif_files(verbose=verbose)
             self.load_xml(xml_file)
