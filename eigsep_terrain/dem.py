@@ -50,21 +50,37 @@ class DEM(dict):
            self.map_crd = {k: np.deg2rad(float(v)) for k, v in
      xmltodict.parse(f)['metadata']['idinfo']['spdom']['bounding'].items()}
 
-    def latlon_to_enu(self, lat_str, lon_str, alt_str=None):
-        '''Convert lat/lon/[alt] deg/deg/[m] strings into east/north/up
+    def latlon_to_enu(self, lat, lon, alt=None, survey_offset=None):
+        '''Convert lat/lon/[alt] deg/deg/[m] into east/north/up
         coordinates in meters.'''
-        lat = np.deg2rad(float(lat_str))
-        lon = np.deg2rad(float(lon_str))
-        if alt_str is None:
+        lat = np.deg2rad(float(lat))
+        lon = np.deg2rad(float(lon))
+        if alt is None:
             alt = 0
         else:
-            alt = float(alt_str)
+            alt = float(alt)
+        if survey_offset is None:
+            survey_offset = self.survey_offset
         ecef = pyuvdata.utils.XYZ_from_LatLonAlt(lat, lon, 0)
         # XXX don't understand negative alt below
         enu = pyuvdata.utils.ENU_from_ECEF(ecef,
                 latitude=self.map_crd['southbc'],
                 longitude=self.map_crd['westbc'], altitude=-alt)
-        return enu - self.survey_offset
+        return enu - survey_offset
+
+    def enu_to_latlon(self, enu, survey_offset=None):
+        '''Convert east/north/up [m] coordinates to latitude/longitude/alt [deg/deg/m].'''
+        alt = 0
+        if survey_offset is None:
+            survey_offset = self.survey_offset
+        xyz = pyuvdata.utils.ECEF_from_ENU(
+                enu + survey_offset,
+                latitude=self.map_crd['southbc'],
+                longitude=self.map_crd['westbc'],
+                altitude=-alt
+        )
+        lat, lon, alt = pyuvdata.utils.LatLonAlt_from_XYZ(xyz)
+        return np.rad2deg(lat), np.rad2deg(lon), alt
 
     def m2px(self, *args, res=None):
         if res is None:
