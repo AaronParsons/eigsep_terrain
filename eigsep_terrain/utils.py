@@ -191,7 +191,7 @@ def horizon_angle_to_distance(angles, alt):
 
 def conductivity_from_resistivity(resistivity_ohm_m):
     '''Return the conductivity of a material given resistivity [Ohm m].'''
-    return 1 / (resisitivity_ohm_m * 1.113e-12 * 100)
+    return 1 / (resistivity_ohm_m * 1.113e-12 * 100)
 
 def permittivity_from_conductivity(conductivity, freqs):
     '''Return the electromagnetic permittivity given a conductivity and a frequency [Hz].'''
@@ -201,7 +201,7 @@ def permittivity_from_conductivity(conductivity, freqs):
 
 def reflection_coefficient(eta, eta0=1):
     '''Return the reflection coefficient crossing from eta0 to eta [permittivity].'''
-    return np.power((eta0 - eta) / (eta0 + eta), 2)
+    return np.abs((eta0 - eta) / (eta0 + eta))**2
 
 def are_points_in_polygon(vertices, points):
     """
