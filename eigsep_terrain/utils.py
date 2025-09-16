@@ -3,6 +3,9 @@
 import numpy as np
 from scipy.constants import c as C
 
+real_dtype = np.float32
+C = real_dtype(C)
+
 R_earth = 6378e3 # m
 
 def distance(a, b):
