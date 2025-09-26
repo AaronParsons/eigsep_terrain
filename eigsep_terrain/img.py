@@ -5,6 +5,7 @@ import cv2
 from .utils import rot_m
 from .ray import ray_trace_basic
 from transformers import pipeline
+import torch
 
 PRM_ORDER = ('e', 'n', 'u', 'th', 'ph', 'ti', 'f')
 
