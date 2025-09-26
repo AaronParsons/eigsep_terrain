@@ -4,6 +4,7 @@ from matplotlib.image import imread
 import cv2
 from .utils import rot_m
 from .ray import ray_trace_basic
+from transformers import pipeline
 
 PRM_ORDER = ('e', 'n', 'u', 'th', 'ph', 'ti', 'f')
 
