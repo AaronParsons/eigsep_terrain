@@ -6,6 +6,7 @@ from .utils import rot_m
 from .ray import ray_trace_basic
 from transformers import pipeline
 import torch
+import pymc as pm
 
 PRM_ORDER = ('e', 'n', 'u', 'th', 'ph', 'ti', 'f')
 
@@ -145,3 +146,57 @@ class HorizonImage:
             self._best_loss = loss
             print(f"'best_prms': ({self.prms_str}),  #[LOSS={loss: 6.4f}]", flush=True)
         return loss
+
+    def ant_loss(self, ant_pos, box_size):
+        ant_ray = self.get_rays(np.array(self.meta['ant_px'][::-1]))
+        r_ant = ant_pos - np.array([self.prms['e'], self.prms['n'], self.prms['u']])
+        
+        delta_theta = np.arccos(np.dot(ant_ray, r_ant) / (np.linalg.norm(ant_ray) * np.linalg.norm(r_ant))) # rad
+        sigma_theta = box_size / np.linalg.norm(r_ant)
+        
+        logL = -delta_theta / (2 * sigma_theta**2) # :0
+        return logL
+    
+class PositionSolver:
+    def __init__(self, ant_pos_prior, fit_imgs, static_imgs, n_rays, dem, eps=0.01, ant_pos_err=20, box_size=0.3):
+        self.fit_imgs = fit_imgs
+        self.ant_pos_prior = ant_pos_prior
+        self.ant_pos_err = ant_pos_err
+        self.imgs = fit_imgs + static_imgs
+        self.box_size = box_size
+        self.dem = dem
+        self.n_rays = n_rays
+        self.eps = eps
+
+    def get_mcmc_prms(self):
+        prms = []
+        for cnt, img in enumerate(self.fit_imgs):
+            _sigmas = self.sigmas[cnt*len(PRM_ORDER): (cnt+1)*len(PRM_ORDER)]
+            prms += [pm.Normal(f"{img.key}_{k}", mu=img.prms[k], sigma=sig) for k, sig in zip(PRM_ORDER, _sigmas)]     
+
+        prms += [pm.Normal(f'ant_{k}', mu=v, sigma=self.sigmas[-3:]) for k, v in zip('enu', self.ant_pos_prior)]
+        return prms
+
+    def set_mcmc_prms(self, theta):
+        for cnt, img in enumerate(self.fit_imgs):
+            img.set_prms(tuple(theta[cnt*len(PRM_ORDER):(cnt+1)*len(PRM_ORDER)]))
+        self.ant_pos = np.array(theta[-3:])
+
+    def set_mcmc_sigmas(self, pos_err=30.0, ang_err=np.deg2rad(5.0), f_err=0.1):
+        img_sigmas = (pos_err, pos_err, pos_err, ang_err, ang_err, ang_err, f_err)
+        self.sigmas = [img.prms[k] * sig if sig == 'f' else sig for k, sig in zip(PRM_ORDER, img_sigmas) for img in self.fit_imgs]
+        self.sigmas += [pos_err, pos_err, pos_err]
+
+    def total_loss(self, theta):
+        self.set_mcmc_prms(theta)
+        L = 0.0
+        for cnt, img in enumerate(self.fit_imgs):
+            L += img.horizon_ray_loss(self.dem, cnt=self.n_rays)
+        L = np.array(L / (len(self.fit_imgs) + self.eps), dtype=np.float32)
+        logp = len(self.fit_imgs) * self.n_rays * (1 - L) * np.log(1.0 - self.eps) + len(self.fit_imgs) * self.n_rays * L * np.log(self.eps)
+        for img in self.imgs:
+            logL = img.ant_loss(self.ant_pos, self.box_size)
+            print('logp', logp)
+            print('logL', logL)
+            logp += logL
+        return logp
