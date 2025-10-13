@@ -196,7 +196,5 @@ class PositionSolver:
         logp = len(self.fit_imgs) * self.n_rays * (1 - L) * np.log(1.0 - self.eps) + len(self.fit_imgs) * self.n_rays * L * np.log(self.eps)
         for img in self.imgs:
             logL = img.ant_loss(self.ant_pos, self.box_size)
-            print('logp', logp)
-            print('logL', logL)
             logp += logL
         return logp
