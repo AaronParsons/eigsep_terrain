@@ -3,3 +3,5 @@ eigsep_terrain.egg-info
 */.ipynb_checkpoints/
 .ipynb_checkpoints/
 build/
+.DS_Store
+notebooks/marjum_dem.npz
