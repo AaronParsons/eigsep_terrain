@@ -5,3 +5,4 @@ eigsep_terrain.egg-info
 build/
 .DS_Store
 notebooks/marjum_dem.npz
+*marjum_dem.npz
