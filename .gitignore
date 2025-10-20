@@ -6,3 +6,4 @@ build/
 .DS_Store
 notebooks/marjum_dem.npz
 *marjum_dem.npz
+notebooks/samples.npz
