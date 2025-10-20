@@ -106,11 +106,11 @@ class DEM(dict):
 
     def get_en(self, erng_m=None, nrng_m=None, return_px=False,
                      decimate=1, edges=False):
-        if erng_m == None:
+        if erng_m is None:
             emn, emx = 0, self.data.shape[1]
         else:
             emn, emx = self.m2px(*erng_m)
-        if nrng_m == None:
+        if nrng_m is None:
             nmn, nmx = 0, self.data.shape[0]
         else:
             nmn, nmx = self.m2px(*nrng_m)
