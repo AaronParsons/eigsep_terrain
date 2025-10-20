@@ -147,14 +147,23 @@ class HorizonImage:
             print(f"'best_prms': ({self.prms_str}),  #[LOSS={loss: 6.4f}]", flush=True)
         return loss
 
+    # def ant_loss(self, ant_pos, box_size):
+    #     ant_ray = self.get_rays(np.array(self.meta['ant_px'][::-1]))
+    #     r_ant = ant_pos - np.array([self.prms['e'], self.prms['n'], self.prms['u']])
+        
+    #     delta_theta = np.arccos(np.dot(ant_ray, r_ant) / (np.linalg.norm(ant_ray) * np.linalg.norm(r_ant))) # rad
+    #     sigma_theta = box_size / np.linalg.norm(r_ant)
+        
+    #     logL = -delta_theta / (2 * sigma_theta**2) # :0
+    #     return logL
+
     def ant_loss(self, ant_pos, box_size):
+        # correction to logL so penalty grows quadratically with error
         ant_ray = self.get_rays(np.array(self.meta['ant_px'][::-1]))
         r_ant = ant_pos - np.array([self.prms['e'], self.prms['n'], self.prms['u']])
-        
-        delta_theta = np.arccos(np.dot(ant_ray, r_ant) / (np.linalg.norm(ant_ray) * np.linalg.norm(r_ant))) # rad
+        delta_theta = np.arccos(np.dot(ant_ray, r_ant) / (np.linalg.norm(ant_ray) * np.linalg.norm(r_ant)))
         sigma_theta = box_size / np.linalg.norm(r_ant)
-        
-        logL = -delta_theta / (2 * sigma_theta**2) # :0
+        logL = -(delta_theta**2) / (2 * sigma_theta**2)  # FIX: Added **2
         return logL
     
 class PositionSolver:
