@@ -175,7 +175,7 @@ class DEM(dict):
             rmin[_b % n_az_bins] = min(rmin[_b % n_az_bins], _r)
             rmax[_b % n_az_bins] = max(rmax[_b % n_az_bins], _r)
         # Assign inf to areas that don't meet anchor length requirements
-        rmin = np.where(rmin >= r_anchor_max, np.Inf, rmin)
+        rmin = np.where(rmin >= r_anchor_max, np.inf, rmin)
         # Fold to enforce anchors being on opposite sides,
         # then minimize total anchor length
         rmin.shape = (n_anchors, -1)
