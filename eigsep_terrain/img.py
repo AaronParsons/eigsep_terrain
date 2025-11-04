@@ -196,11 +196,12 @@ class PositionSolver:
         self.sigmas = [img.prms[k] * sig if sig == 'f' else sig for k, sig in zip(PRM_ORDER, img_sigmas) for img in self.fit_imgs]
         self.sigmas += [pos_err, pos_err, pos_err]
 
-    def total_loss(self, theta):
+    def total_loss(self, theta, ray_cnt):
         self.set_mcmc_prms(theta)
         L = 0.0
         for cnt, img in enumerate(self.fit_imgs):
-            L += img.horizon_ray_loss(self.dem, cnt=self.n_rays)
+            # L += img.horizon_ray_loss(self.dem, cnt=self.n_rays)
+            L += img.horizon_ray_loss(self.dem, cnt=ray_cnt)
         L = np.array(L / (len(self.fit_imgs) + self.eps), dtype=np.float32)
         logp = len(self.fit_imgs) * self.n_rays * (1 - L) * np.log(1.0 - self.eps) + len(self.fit_imgs) * self.n_rays * L * np.log(self.eps)
         for img in self.imgs:
