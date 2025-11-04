@@ -8,5 +8,6 @@ notebooks/marjum_dem.npz
 *marjum_dem.npz
 notebooks/samples.npz
 notebooks/samples2.npz
+notebooks/samples24.npz
 notebooks/mcmc_checkpoint.h5
 notebooks/full_chain.npz
