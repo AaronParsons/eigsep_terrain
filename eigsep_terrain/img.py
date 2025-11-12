@@ -7,7 +7,8 @@ from .ray import ray_trace_basic
 from transformers import pipeline
 import torch
 import pymc as pm
-import pytensor as pt
+import pytensor.tensor as pt
+import pytensor
 
 PRM_ORDER = ('e', 'n', 'u', 'th', 'ph', 'ti', 'f')
 
@@ -245,7 +246,7 @@ class LogLikeOp(pt.Op):
         logp_var = loglike_op(theta_var)
         
         # Compile and evaluate
-        f = pt.function([theta_var], logp_var)
+        f = pytensor.function([theta_var], logp_var)
         result = f(test_theta)
         
         print(f"Op returned: {result}")
