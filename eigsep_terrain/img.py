@@ -7,6 +7,7 @@ from .ray import ray_trace_basic
 from transformers import pipeline
 import torch
 import pymc as pm
+import pytensor as pt
 
 PRM_ORDER = ('e', 'n', 'u', 'th', 'ph', 'ti', 'f')
 
@@ -208,3 +209,45 @@ class PositionSolver:
             logL = img.ant_loss(self.ant_pos, self.box_size)
             logp += logL
         return logp
+
+class LogLikeOp(pt.Op):
+    """
+    Wraps your numpy-based total_loss for PyMC.
+    This is all you need for Metropolis sampling.
+    """
+    itypes = [pt.dvector]  # input: 1D vector of parameters
+    otypes = [pt.dscalar]  # output: scalar log-probability
+    
+    def __init__(self, pos_slvr, ray_cnt):
+        self.pos_slvr = pos_slvr
+        self.ray_cnt = ray_cnt
+    
+    def perform(self, node, inputs, outputs):
+        """This is where your numpy function gets called."""
+        (theta,) = inputs
+        
+        # Call your existing numpy function
+        logp = self.pos_slvr.total_loss(theta, ray_cnt=self.ray_cnt)
+        
+        # Return as numpy array
+        outputs[0][0] = np.array(logp, dtype=np.float64)
+
+    def test_op(self):
+        """Test that your Op is working correctly."""
+        print("Testing LogLikeOp...")
+        
+        # Create a test parameter vector
+        test_theta = np.random.randn(24)
+        
+        # Test the Op directly
+        loglike_op = LogLikeOp(self.pos_slvr, self.ray_cnt)
+        theta_var = pt.dvector()
+        logp_var = loglike_op(theta_var)
+        
+        # Compile and evaluate
+        f = pt.function([theta_var], logp_var)
+        result = f(test_theta)
+        
+        print(f"Op returned: {result}")
+        print(f"Direct call returned: {self.pos_slvr.total_loss(test_theta, ray_cnt=self.ray_cnt)}")
+        print("If these match, the Op is working!") 
