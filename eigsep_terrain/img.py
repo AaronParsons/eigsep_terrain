@@ -11,6 +11,10 @@ import pytensor.tensor as pt
 import pytensor
 
 PRM_ORDER = ('e', 'n', 'u', 'th', 'ph', 'ti', 'f')
+PMR_ORDER_FULL = ['e0', 'n0', 'u0', 'th0', 'ph0', 'ti0', 'f0', 
+                  'e1', 'n1', 'u1', 'th1', 'ph1', 'ti1', 'f1',
+                  'e2', 'n2', 'u2', 'th2', 'ph2', 'ti2', 'f2',
+                  'e_ant', 'n_ant', 'u_ant']
 
 def pixels_to_rays(Nu, Nv, f, uv=None, dtype=np.float32):
     if uv is None:
