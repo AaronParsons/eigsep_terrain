@@ -12,3 +12,4 @@ notebooks/samples24.npz
 notebooks/mcmc_checkpoint.h5
 notebooks/mcmc_checkpoint_short.h5
 notebooks/full_chain.npz
+*/.nc
