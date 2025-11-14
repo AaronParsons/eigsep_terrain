@@ -14,3 +14,5 @@ notebooks/mcmc_checkpoint_short.h5
 notebooks/full_chain.npz
 notebooks/short_pymc_chechpoint.nc
 notebooks/short_pymc_trace.nc
+notebooksslightly_larger_pymc_checkpoint.nc
+notebooks/slightly_larger_pymc_trace.nc
