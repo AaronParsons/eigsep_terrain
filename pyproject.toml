@@ -24,6 +24,15 @@ dependencies = [
     "pyuvdata",
     "tqdm",
     "linsolve",
+    "jax",
+]
+
+[project.optional-dependencies]
+img = [
+    "opencv-python",
+    "torch",
+    "transformers",
+    "pymc",
 ]
 
 [tool.setuptools]
