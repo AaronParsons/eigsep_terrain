@@ -9,6 +9,6 @@ try:
 except ImportError:
     from warnings import warn
     warn(
-        "img module could not be imported, install extra dependencies"
+        "img module could not be imported, install extra dependencies "
         "from pyproject.toml to enable it."
     )
