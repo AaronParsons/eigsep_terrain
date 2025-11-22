@@ -25,6 +25,7 @@ dependencies = [
     "tqdm",
     "linsolve",
     "jax",
+    "healpy",
 ]
 
 [project.optional-dependencies]
