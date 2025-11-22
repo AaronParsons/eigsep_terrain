@@ -269,9 +269,9 @@ def permittivity_from_conductivity(conductivity, freqs):
     '''Return the refractive index for a material with permittivity 1.
     This function is deprecated; use complex_ref_index instead.'''
     warnings.warn(
-        "permittivity_from_conductivity is deprecated due to confusing
-        naming. It actually returns refractive index, assuming relative
-        permittivity of 1. Use complex_ref_index instead", 
+        "permittivity_from_conductivity is deprecated due to confusing"
+        "naming. It actually returns refractive index, assuming relative"
+        "permittivity of 1. Use complex_ref_index instead", 
         DeprecationWarning
     )
     return complex_ref_index(1, conductivity, freqs)
