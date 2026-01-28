@@ -26,12 +26,13 @@ class HorizonImage:
         self.key = os.path.basename(filename).split('_')[-1].split('.')[0]
         self.npzfile = 'img_seg_' + os.path.basename(filename).replace('jpg','npz')
         self.img = np.flipud(imread(self.filename))
+        self.px_dist = kwargs.pop('px_dist', 150)  # px_dist from mask_near_horizon
         
         if not os.path.exists(self.npzfile):
             segdict = self.segment_image()
             self.save_segment_image(segdict)
         self.sky_mask = self.read_skymask()
-        self.horizon_mask = self.mask_near_horizon()
+        self.horizon_mask = self.mask_near_horizon(self.px_dist)
         
         if self.key in meta:
             self.meta = meta[self.key]
@@ -90,7 +91,7 @@ class HorizonImage:
         rays = np.einsum('ij,j...->i...', rm, z_rays)
         return rays
 
-    def mask_near_horizon(self, px_dist=150):
+    def mask_near_horizon(self, px_dist):
         m = (self.sky_mask > 0).astype(np.uint8) * 255
         kernel = np.ones((3,3), np.uint8)
         inner_eroded = cv2.erode(m, kernel, iterations=1)
