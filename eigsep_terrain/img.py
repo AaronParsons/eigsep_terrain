@@ -33,7 +33,7 @@ class HorizonImage:
             segdict = self.segment_image()
             self.save_segment_image(segdict)
         self.sky_mask = self.read_skymask()
-        self.horizon_mask = self.mask_near_horizon(self.px_dist)
+        self.horizon_mask, self.horizon_dist = self.mask_near_horizon(self.px_dist)
         
         if self.key in meta:
             self.meta = meta[self.key]
@@ -100,7 +100,7 @@ class HorizonImage:
         inv_edge = cv2.bitwise_not(edge)
         dist = cv2.distanceTransform(inv_edge, cv2.DIST_L2, 5)
         near_horizon = (dist <= px_dist)
-        return near_horizon
+        return near_horizon, dist
 
     def choose_pixels(self, N=1000, mask=None):
         if mask is None:
@@ -114,7 +114,8 @@ class HorizonImage:
         (E, N), U = dem.get_en(), dem.data
         start_point = np.array([self.prms[k] for k in 'enu'], dtype=dtype)
         delta_r_prev = None
-        #for delta_r_m in 5**np.arange(2, -1, -1):
+        # Take coarse (5**1 m) steps, then back up and refine with fine (5**0 m) steps
+        #for delta_r_m in 5**np.arange(2, -1, -1):  # This is too coarse: jumps through cliffs
         for delta_r_m in 5**np.arange(1, -1, -1):
             if delta_r_prev is None:
                 r = ray_trace_basic(E, N, U, start_point, rays_2d,
@@ -133,33 +134,38 @@ class HorizonImage:
 
     def reset_pixel_choice(self):
         self._px_choice = None
-        self._best_loss = np.inf
+        self._px_horizon_dist = None
+        self._best_logL = -np.inf
         
-    def horizon_ray_loss(self, dem, cnt=1000, dtype=np.float32, verbose=True):
-        if self._px_choice is None:
+    def horizon_ray_logL(self, dem, cnt=1000, px_err=2, dtype=np.float32, verbose=False):
+        if self._px_choice == None:
             self._px_choice = self.choose_pixels(N=cnt)
         x_px, y_px = self._px_choice
         is_sky = self.sky_mask[x_px, y_px]
+        hor_dist = self.horizon_dist[x_px, y_px]
+        # model probability of mislabeled pixel ~50/50 at edge, falling off exponentially with d
+        logL_hor_dist = np.log(0.5) - 0.5 * hor_dist / px_err
+        inv_logL_hor_dist = np.log(1 - np.exp(logL_hor_dist))
         rays = self.get_rays(pixels=(x_px, y_px), dtype=dtype)
         r = self.ray_distance(dem, rays, dtype=dtype)
         model_sky = np.isnan(r)
-        loss = np.mean(is_sky != model_sky)
-        if verbose and loss < self._best_loss:
-            self._best_loss = loss
-            print(f"'best_prms': ({self.prms_str}),  #[LOSS={loss: 6.4f}]", flush=True)
-        return loss
+        logL = np.sum(np.where(is_sky == model_sky, inv_logL_hor_dist, logL_hor_dist))
+        if verbose and logL > self._best_logL:
+            self._best_logL = logL
+            print(f"'best_prms': ({self.prms_str}),  #[LOGL={logL: 6.4f}]", flush=True)
+        return logL
 
-    def ant_loss(self, ant_pos, box_size):
+    def ant_logL(self, ant_pos, box_size):
         ant_ray = self.get_rays(np.array(self.meta['ant_px'][::-1]))
         r_ant = ant_pos - np.array([self.prms['e'], self.prms['n'], self.prms['u']])
         
         delta_theta = np.arccos(np.dot(ant_ray, r_ant) / (np.linalg.norm(ant_ray) * np.linalg.norm(r_ant))) # rad
         sigma_theta = box_size / np.linalg.norm(r_ant)
-        logL = -delta_theta**2 / (2 * sigma_theta**2)
+        logL = np.log(1 / np.sqrt(2 * np.pi * sigma_theta**2)) - 0.5 * delta_theta**2 / sigma_theta**2
         return logL
     
 class PositionSolver:
-    def __init__(self, ant_pos_prior, fit_imgs, static_imgs, n_rays, dem, eps=0.01, ant_pos_err=20, box_size=0.3):
+    def __init__(self, ant_pos_prior, fit_imgs, static_imgs, n_rays, dem, px_err=2, ant_pos_err=20, box_size=0.3):
         self.fit_imgs = fit_imgs
         self.ant_pos_prior = ant_pos_prior
         self.ant_pos_err = ant_pos_err
@@ -167,7 +173,8 @@ class PositionSolver:
         self.box_size = box_size
         self.dem = dem
         self.n_rays = n_rays
-        self.eps = eps
+        self.px_err = px_err
+        self._best_logL = -np.inf
 
     def get_mcmc_prms(self):
         prms = []
@@ -175,29 +182,34 @@ class PositionSolver:
             _sigmas = self.sigmas[cnt*len(PRM_ORDER): (cnt+1)*len(PRM_ORDER)]
             prms += [pm.Normal(f"{img.key}_{k}", mu=img.prms[k], sigma=sig) for k, sig in zip(PRM_ORDER, _sigmas)]     
 
-        prms += [pm.Normal(f'ant_{k}', mu=v, sigma=self.sigmas[-3:]) for k, v in zip('enu', self.ant_pos_prior)]
+        prms += [pm.Normal(f'ant_{k}', mu=v, sigma=s) for k, v, s in zip('enu', self.ant_pos_prior, self.sigmas[-3:])]
         return prms
 
     def set_mcmc_prms(self, theta):
         for cnt, img in enumerate(self.fit_imgs):
             img.set_prms(tuple(theta[cnt*len(PRM_ORDER):(cnt+1)*len(PRM_ORDER)]))
-        self.ant_pos = np.array(theta[-3:])
+        self.ant_pos = np.asarray(theta[-3:])
 
     def set_mcmc_sigmas(self, pos_err=30.0, ang_err=np.deg2rad(5.0), f_err=0.1):
         img_sigmas = (pos_err, pos_err, pos_err, ang_err, ang_err, ang_err, f_err)
-        self.sigmas = [img.prms[k] * sig if sig == 'f' else sig for k, sig in zip(PRM_ORDER, img_sigmas) for img in self.fit_imgs]
+        self.sigmas = [img.prms[k] * sig if sig == 'f' else sig for img in self.fit_imgs for k, sig in zip(PRM_ORDER, img_sigmas)]
         self.sigmas += [pos_err, pos_err, pos_err]
 
-    def total_loss(self, theta, ray_cnt=None):
+    def total_logL(self, theta, ray_cnt=None, px_err=None, verbose=False):
         if ray_cnt == None:
             ray_cnt = self.n_rays
+        if px_err == None:
+            px_err = self.px_err
         self.set_mcmc_prms(theta)
-        L = 0.0
+        logL_rays = 0.0
         for cnt, img in enumerate(self.fit_imgs):
-            L += img.horizon_ray_loss(self.dem, cnt=ray_cnt)
-        L = np.array(L / (len(self.fit_imgs) + self.eps), dtype=np.float32)
-        logp = len(self.fit_imgs) * ray_cnt * (1 - L) * np.log(1.0 - self.eps) + len(self.fit_imgs) * ray_cnt * L * np.log(self.eps)
+            logL_rays += img.horizon_ray_logL(self.dem, cnt=ray_cnt, px_err=px_err, verbose=False)
+        logL_ant = 0
         for img in self.imgs:
-            logL = img.ant_loss(self.ant_pos, self.box_size)
-            logp += logL
-        return logp
+            logL_ant += img.ant_logL(self.ant_pos, self.box_size)
+        logL = logL_rays + logL_ant 
+        if verbose and logL > self._best_logL:
+            self._best_logL = logL
+            print(f"'best_prms': ({theta}),  #[LOGL={logL: 6.4f}]", flush=True)
+            print(logL, logL_rays, logL_ant)
+        return logL
