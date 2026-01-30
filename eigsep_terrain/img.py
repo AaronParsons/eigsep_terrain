@@ -145,7 +145,7 @@ class HorizonImage:
         hor_dist = self.horizon_dist[x_px, y_px]
         # model probability of mislabeled pixel ~50/50 at edge, falling off exponentially with d
         logL_hor_dist = np.log(0.5) - 0.5 * hor_dist / px_err
-        inv_logL_hor_dist = np.log(1 - np.exp(logL_hor_dist))
+        inv_logL_hor_dist = np.log1p(-np.exp(logL_hor_dist))
         rays = self.get_rays(pixels=(x_px, y_px), dtype=dtype)
         r = self.ray_distance(dem, rays, dtype=dtype)
         model_sky = np.isnan(r)
@@ -159,7 +159,8 @@ class HorizonImage:
         ant_ray = self.get_rays(np.array(self.meta['ant_px'][::-1]))
         r_ant = ant_pos - np.array([self.prms['e'], self.prms['n'], self.prms['u']])
         
-        delta_theta = np.arccos(np.dot(ant_ray, r_ant) / (np.linalg.norm(ant_ray) * np.linalg.norm(r_ant))) # rad
+        cos_pred = np.dot(ant_ray, r_ant) / (np.linalg.norm(ant_ray) * np.linalg.norm(r_ant))
+        delta_theta = np.arccos(cos_pred.clip(-1, 1)) # rad
         sigma_theta = box_size / np.linalg.norm(r_ant)
         logL = np.log(1 / np.sqrt(2 * np.pi * sigma_theta**2)) - 0.5 * delta_theta**2 / sigma_theta**2
         return logL
@@ -192,7 +193,7 @@ class PositionSolver:
 
     def set_mcmc_sigmas(self, pos_err=30.0, ang_err=np.deg2rad(5.0), f_err=0.1):
         img_sigmas = (pos_err, pos_err, pos_err, ang_err, ang_err, ang_err, f_err)
-        self.sigmas = [img.prms[k] * sig if sig == 'f' else sig for img in self.fit_imgs for k, sig in zip(PRM_ORDER, img_sigmas)]
+        self.sigmas = [img.prms[k] * sig if k == 'f' else sig for img in self.fit_imgs for k, sig in zip(PRM_ORDER, img_sigmas)]
         self.sigmas += [pos_err, pos_err, pos_err]
 
     def total_logL(self, theta, ray_cnt=None, px_err=None, verbose=False):
