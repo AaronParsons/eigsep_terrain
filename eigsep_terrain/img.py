@@ -2,8 +2,9 @@ import os
 import numpy as np
 from matplotlib.image import imread
 import cv2
-from .utils import rot_m
+from .utils import rot_m, mask_near_horizon, fill_psky_holes
 from .ray import ray_trace_basic
+from .seg import TiledSkyProbSegFormer
 from transformers import pipeline
 import torch
 import pymc as pm
@@ -32,8 +33,9 @@ class HorizonImage:
         if not os.path.exists(self.npzfile):
             segdict = self.segment_image()
             self.save_segment_image(segdict)
-        self.sky_mask = self.read_skymask()
-        self.horizon_mask, self.horizon_dist = self.mask_near_horizon(self.px_dist)
+        self.sky_mask, self.psky = self.read_psky()
+        self.horizon_mask, self.horizon_dist = mask_near_horizon(self.sky_mask,
+                                                                 self.px_dist)
         
         if self.key in meta:
             self.meta = meta[self.key]
@@ -50,7 +52,7 @@ class HorizonImage:
 
     @property
     def prms_str(self):
-        return f"{self.prms['e']: 7.2f}, {self.prms['n']: 7.2f},  {self.prms['u']: 7.2f}, {self.prms['th']: 6.4f}, {self.prms['ph']: 6.4f}, {self.prms['ti']: 5.4f}, {self.prms['f']: 7.2f}"
+        return f"{self.prms['e']: 7.2f}, {self.prms['n']: 7.2f}, {self.prms['u']: 7.2f}, {self.prms['th']: 6.4f}, {self.prms['ph']: 6.4f}, {self.prms['ti']: 5.4f}, {self.prms['f']: 7.2f}"
 
     @property
     def npix_y(self):
@@ -60,27 +62,22 @@ class HorizonImage:
     def npix_x(self):
         return self.img.shape[1]
         
-    def segment_image(self):
-        segformer = pipeline(task="image-segmentation",
-                             model="nvidia/segformer-b0-finetuned-ade-512-512",
-                             dtype=torch.float16)
-        seg = segformer(self.filename)
-        return {d['label']: d['mask'] for d in seg}
+    def segment_image(self, device='cpu', thr=0.6, fill_thresh=200**2,
+                      connectivity=8, px_dist=150):
+        seg = TiledSkyProbSegFormer(device=device)
+        _psky = seg.p_sky_tiled(self.filename, tile=1024, overlap=256, batch=2)
+        self.sky_mask, self.psky = fill_psky_holes(_psky, thr, fill_thresh,
+                                                   connectivity, px_dist)
+        return {'skymask': self.sky_mask, 'psky': self.psky}
 
     def save_segment_image(self, segdict):
         np.savez(self.npzfile, **segdict)
 
-    def read_skymask(self, fill_thresh=200**2):
+    def read_psky(self):
         npz = np.load(self.npzfile)
-        skymask = npz['sky']
-        # remove segmenting holes from presence of antenna
-        num_labels, labels, stats, cens = cv2.connectedComponentsWithStats((skymask == 0).astype(np.uint8), connectivity=8)
-        for label in range(1, num_labels):   # skip background (label 0)
-            area = stats[label, cv2.CC_STAT_AREA]
-            if area < fill_thresh:
-                skymask[labels == label] = 255
-        skymask = np.flipud((skymask == 255).astype(bool))
-        return skymask
+        psky = np.flipud(npz['psky'])
+        skymask = np.flipud(npz['skymask'])
+        return skymask, psky
         
     def get_rays(self, pixels=None, dtype=np.float32):
         z_rays = pixels_to_rays(self.npix_y, self.npix_x,
@@ -92,21 +89,13 @@ class HorizonImage:
         rays = np.einsum('ij,j...->i...', rm, z_rays)
         return rays
 
-    def mask_near_horizon(self, px_dist):
-        m = (self.sky_mask > 0).astype(np.uint8) * 255
-        kernel = np.ones((3,3), np.uint8)
-        inner_eroded = cv2.erode(m, kernel, iterations=1)
-        edge = cv2.bitwise_xor(m, inner_eroded)
-        inv_edge = cv2.bitwise_not(edge)
-        dist = cv2.distanceTransform(inv_edge, cv2.DIST_L2, 5)
-        near_horizon = (dist <= px_dist)
-        return near_horizon, dist
-
     def choose_pixels(self, N=1000, mask=None):
         if mask is None:
             mask = self.horizon_mask
         x, y = np.where(mask)
-        inds = np.random.choice(np.arange(x.size), size=N)
+        w = np.exp(-0.5 * self.horizon_dist[x, y]**2 / (self.px_dist / 2)**2)
+        rng = np.random.default_rng()
+        inds = rng.choice(x.size, size=N, replace=False, p=w / w.sum())
         return (x[inds], y[inds])
 
     def ray_distance(self, dem, rays, dtype=np.float32):
@@ -134,23 +123,25 @@ class HorizonImage:
 
     def reset_pixel_choice(self):
         self._px_choice = None
-        self._px_horizon_dist = None
         self._best_logL = -np.inf
         
-    def horizon_ray_logL(self, dem, cnt=1000, px_err=2, dtype=np.float32, verbose=False):
-        if self._px_choice == None:
+    def horizon_ray_logL(self, dem, cnt=1000, dtype=np.float32, verbose=False, eps=1e-3):
+        if self._px_choice is None:
             self._px_choice = self.choose_pixels(N=cnt)
         x_px, y_px = self._px_choice
-        is_sky = self.sky_mask[x_px, y_px]
-        hor_dist = self.horizon_dist[x_px, y_px]
-        # model probability of mislabeled pixel ~50/50 at edge, falling off exponentially with d
-        logL_hor_dist = np.log(0.5) - 0.5 * hor_dist / px_err
-        inv_logL_hor_dist = np.log1p(-np.exp(logL_hor_dist))
+        # Per-pixel probability that the pixel is sky
+        psky = self.psky[x_px, y_px].clip(eps, 1 - eps) # Avoid log(0)
+
+        # Evaluate your geometric horizon model (binary)
         rays = self.get_rays(pixels=(x_px, y_px), dtype=dtype)
         r = self.ray_distance(dem, rays, dtype=dtype)
-        model_sky = np.isnan(r)
-        logL = np.sum(np.where(is_sky == model_sky, inv_logL_hor_dist, logL_hor_dist))
-        if verbose and logL > self._best_logL:
+        model_sky = np.isnan(r)  # True => model predicts sky
+
+        # if model says sky, probability of observing "sky" is psky, else 1-psky
+        logp_sky = np.log(psky)
+        logp_ground = np.log1p(-psky)  # stable log(1-psky)
+        logL = np.sum(np.where(model_sky, logp_sky, logp_ground))
+        if verbose and logL > getattr(self, "_best_logL", -np.inf):
             self._best_logL = logL
             print(f"'best_prms': ({self.prms_str}),  #[LOGL={logL: 6.4f}]", flush=True)
         return logL
@@ -166,7 +157,7 @@ class HorizonImage:
         return logL
     
 class PositionSolver:
-    def __init__(self, ant_pos_prior, fit_imgs, static_imgs, n_rays, dem, px_err=2, ant_pos_err=20, box_size=0.3):
+    def __init__(self, ant_pos_prior, fit_imgs, static_imgs, n_rays, dem, ant_pos_err=20, box_size=0.3):
         self.fit_imgs = fit_imgs
         self.ant_pos_prior = ant_pos_prior
         self.ant_pos_err = ant_pos_err
@@ -174,8 +165,6 @@ class PositionSolver:
         self.box_size = box_size
         self.dem = dem
         self.n_rays = n_rays
-        self.px_err = px_err
-        self._best_logL = -np.inf
 
     def get_mcmc_prms(self):
         prms = []
@@ -196,21 +185,24 @@ class PositionSolver:
         self.sigmas = [img.prms[k] * sig if k == 'f' else sig for img in self.fit_imgs for k, sig in zip(PRM_ORDER, img_sigmas)]
         self.sigmas += [pos_err, pos_err, pos_err]
 
-    def total_logL(self, theta, ray_cnt=None, px_err=None, verbose=False):
+    @property
+    def prms_str(self):
+        imgs_str = [img.prms_str for img in self.fit_imgs]
+        ant_str = f"{self.ant_pos[0]: 7.2f}, {self.ant_pos[1]: 7.2f}, {self.ant_pos[2]: 7.2f}"
+        return ',\n'.join(imgs_str + [ant_str])
+
+    def total_logL(self, theta, ray_cnt=None, verbose=False, eps=1e-3):
         if ray_cnt == None:
             ray_cnt = self.n_rays
-        if px_err == None:
-            px_err = self.px_err
         self.set_mcmc_prms(theta)
         logL_rays = 0.0
         for cnt, img in enumerate(self.fit_imgs):
-            logL_rays += img.horizon_ray_logL(self.dem, cnt=ray_cnt, px_err=px_err, verbose=False)
+            logL_rays += img.horizon_ray_logL(self.dem, cnt=ray_cnt, verbose=False, eps=eps)
         logL_ant = 0
         for img in self.imgs:
             logL_ant += img.ant_logL(self.ant_pos, self.box_size)
         logL = logL_rays + logL_ant 
-        if verbose and logL > self._best_logL:
+        if verbose and logL > getattr(self, "_best_logL", -np.inf):
             self._best_logL = logL
-            print(f"'best_prms': ({theta}),  #[LOGL={logL: 6.4f}]", flush=True)
-            print(logL, logL_rays, logL_ant)
+            print(f"'best_prms': (\n{self.prms_str}\n),  #[LOGL={logL: 6.4f}]", flush=True)
         return logL
