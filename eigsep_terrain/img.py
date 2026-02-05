@@ -33,7 +33,7 @@ class HorizonImage:
         if not os.path.exists(self.npzfile):
             segdict = self.segment_image()
             self.save_segment_image(segdict)
-        self.sky_mask, self.psky = self.read_psky()
+        self.sky_mask, self.psky, self.ptree = self.read_psky()
         self.horizon_mask, self.horizon_dist = mask_near_horizon(self.sky_mask,
                                                                  self.px_dist)
         
@@ -65,10 +65,10 @@ class HorizonImage:
     def segment_image(self, device='cpu', thr=0.6, fill_thresh=200**2,
                       connectivity=8, px_dist=150):
         seg = TiledSkyProbSegFormer(device=device)
-        _psky = seg.p_sky_tiled(self.filename, tile=1024, overlap=256, batch=2)
+        _psky, _ptree = seg.p_sky_tiled(self.filename, tile=1024, overlap=256, batch=2)
         self.sky_mask, self.psky = fill_psky_holes(_psky, thr, fill_thresh,
                                                    connectivity, px_dist)
-        return {'skymask': self.sky_mask, 'psky': self.psky}
+        return {'skymask': self.sky_mask, 'psky': self.psky, 'ptree': _ptree}
 
     def save_segment_image(self, segdict):
         np.savez(self.npzfile, **segdict)
@@ -76,8 +76,9 @@ class HorizonImage:
     def read_psky(self):
         npz = np.load(self.npzfile)
         psky = np.flipud(npz['psky'])
+        ptree = np.flipud(npz['ptree'])
         skymask = np.flipud(npz['skymask'])
-        return skymask, psky
+        return skymask, psky, ptree
         
     def get_rays(self, pixels=None, dtype=np.float32):
         z_rays = pixels_to_rays(self.npix_y, self.npix_x,
