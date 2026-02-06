@@ -1,12 +1,13 @@
 import os
 import numpy as np
 from matplotlib.image import imread
-import cv2
 from .utils import rot_m, mask_near_horizon, fill_psky_holes
-from .ray import ray_trace_basic
+#from .ray import ray_trace_basic
+from .ray import ray_trace_basic_jax_jit as ray_trace_basic
 from .seg import TiledSkyProbSegFormer
 from transformers import pipeline
 import torch
+import cv2
 import pymc as pm
 
 PRM_ORDER = ('e', 'n', 'u', 'th', 'ph', 'ti', 'f')
@@ -29,13 +30,20 @@ class HorizonImage:
         self.npzfile = 'img_seg_' + os.path.basename(filename).replace('jpg','npz')
         self.img = np.flipud(imread(self.filename))
         self.px_dist = kwargs.pop('px_dist', 150)  # px_dist from mask_near_horizon
+        self.px_smooth = kwargs.pop('px_smooth', 100)  # px_dist from mask_near_horizon
         
         if not os.path.exists(self.npzfile):
             segdict = self.segment_image()
             self.save_segment_image(segdict)
-        self.sky_mask, self.psky, self.ptree = self.read_psky()
-        self.horizon_mask, self.horizon_dist = mask_near_horizon(self.sky_mask,
-                                                                 self.px_dist)
+        self.sky_mask, _psky, self.ptree = self.read_psky()
+        _hmask, _ = self.gen_horizon_mask(px_dist=150)  # XXX manual tuned px_dist
+        maybe_tree = _hmask * self.ptree
+        psky = np.where(maybe_tree > 0.05, 0.5, _psky)  # XXX manual thresh
+        sky, psky_filled = fill_psky_holes(psky, 0.6, 200**2, 8, 50)
+        ker = (self.px_smooth, self.px_smooth)
+        psky_blur = cv2.blur(psky_filled, ker, cv2.BORDER_DEFAULT)
+        self.psky = psky_blur
+        self.horizon_mask, self.horizon_dist = self.gen_horizon_mask()
         
         if self.key in meta:
             self.meta = meta[self.key]
@@ -125,6 +133,12 @@ class HorizonImage:
     def reset_pixel_choice(self):
         self._px_choice = None
         self._best_logL = -np.inf
+
+    def gen_horizon_mask(self, px_dist=None):
+        if px_dist == None:
+            px_dist = self.px_dist
+        horizon_mask, horizon_dist = mask_near_horizon(self.sky_mask, px_dist)
+        return horizon_mask, horizon_dist
         
     def horizon_ray_logL(self, dem, cnt=1000, dtype=np.float32, verbose=False, eps=1e-3):
         if self._px_choice is None:
