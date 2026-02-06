@@ -26,7 +26,7 @@ def calc_maxiter(E, N, U, start_point, delta_r_m=1, r_max=None, dtype=dtype_r):
     return max_iter
 
 def ray_trace_basic(E, N, U, start_point, rays, delta_r_m=1,
-                    r_start=None, max_iter=None, r_max=None, dtype=dtype_r):
+                    r_start=None, max_iter=4096, dtype=dtype_r):
     '''Return the distance along a HealPix grid of specified nside from a
     ENU starting point until a ray intersects the terrain, in steps of 
     delta_r_m [m], out to a specified r_max_m (or map edge, if None).
@@ -42,8 +42,6 @@ def ray_trace_basic(E, N, U, start_point, rays, delta_r_m=1,
     u_max = dtype(U.max())
     dE = E[1] - E[0]
     dN = N[1] - N[0]
-    if max_iter is None:
-        max_iter = calc_maxiter(E, N, U, start_point, delta_r_m=delta_r_m, r_max=r_max, dtype=dtype)
     assert rays.shape[0] == 3
     dr_vec = delta_r_m * rays
     if r_start is None:
@@ -80,6 +78,7 @@ def ray_trace_basic(E, N, U, start_point, rays, delta_r_m=1,
     r[inds] = np.nan
     return r
 
+
 def ray_trace_basic_jax(E, N, U, start_point, rays, delta_r_m=1.0,
                         r_start=None, max_iter=4096):
     E = jnp.asarray(E)
@@ -88,6 +87,13 @@ def ray_trace_basic_jax(E, N, U, start_point, rays, delta_r_m=1.0,
     start_point = jnp.asarray(start_point)
     rays = jnp.asarray(rays)
 
+    # Choose a float dtype for distances (do NOT use U.dtype if U might be int)
+    r_dtype = jnp.result_type(U, E, N, start_point, rays, jnp.float32)
+    if not jnp.issubdtype(r_dtype, jnp.floating):
+        r_dtype = jnp.float32
+
+    delta_r_m = jnp.asarray(delta_r_m, dtype=r_dtype)
+
     Ne = E.shape[0]
     Nn = N.shape[0]
     Nr = rays.shape[1]
@@ -95,24 +101,24 @@ def ray_trace_basic_jax(E, N, U, start_point, rays, delta_r_m=1.0,
     E0, Emax = E[0], E[-1]
     N0, Nmax = N[0], N[-1]
 
-    dE = E[1] - E[0]
-    dN = N[1] - N[0]
+    dE = (E[1] - E[0]).astype(r_dtype)
+    dN = (N[1] - N[0]).astype(r_dtype)
     inv_dE = 1.0 / dE
     inv_dN = 1.0 / dN
 
     u_max = jnp.max(U)
 
     if r_start is None:
-        r0 = jnp.full((Nr,), delta_r_m, dtype=U.dtype)
+        r0 = jnp.full((Nr,), delta_r_m, dtype=r_dtype)
         active0 = jnp.ones((Nr,), dtype=jnp.bool_)
     else:
-        r0 = jnp.asarray(r_start, dtype=U.dtype)
+        r0 = jnp.asarray(r_start, dtype=r_dtype)   # <-- critical
         active0 = ~jnp.isnan(r0)
 
     def step_fn(state):
         i, r, active = state
 
-        pts = start_point[:, None] + r[None, :] * rays
+        pts = start_point[:, None].astype(r_dtype) + r[None, :] * rays.astype(r_dtype)
         px, py, pz = pts[0], pts[1], pts[2]
 
         in_bounds = (px >= E0) & (px <= Emax) & (py >= N0) & (py <= Nmax)
@@ -125,31 +131,18 @@ def ray_trace_basic_jax(E, N, U, start_point, rays, delta_r_m=1.0,
         u_m = U[n_px_c, e_px_c]
 
         live = active & in_bounds
-
-        # hit: stop and keep r (matches NumPy prune-by-(pz>u_m))
         hit = live & (pz <= u_m)
 
-        # above-ground candidates (before sentinel filtering)
         above = live & (pz > u_m)
-
-        # NumPy semantics: if above-ground but u_m is "invalid" (== u_max), set NaN
         invalid = above & ~(u_m < u_max)
-
-        # continue only if above-ground and valid terrain
         cont = above & (u_m < u_max)
 
-        # out-of-bounds -> NaN
         oob = active & (~in_bounds)
 
-        # step continuing rays
         r = jnp.where(cont, r + delta_r_m, r)
-
-        # apply NaNs (newly OOB or invalid terrain while above ground)
         r = jnp.where(oob | invalid, jnp.nan, r)
 
-        # keep only continuing rays active
         active = cont
-
         return (i + 1, r, active)
 
     def cond_fn(state):
@@ -157,10 +150,9 @@ def ray_trace_basic_jax(E, N, U, start_point, rays, delta_r_m=1.0,
         return (i < max_iter) & jnp.any(active)
 
     _, r_final, active_final = lax.while_loop(cond_fn, step_fn, (jnp.int32(0), r0, active0))
-
-    # remaining active => never hit by max_iter => NaN
     r_final = jnp.where(active_final, jnp.nan, r_final)
     return r_final
+
 
 # JIT-compiled callable (max_iter treated as static if you wrap it this way)
 ray_trace_basic_jax_jit = jax.jit(ray_trace_basic_jax, static_argnames=("max_iter",))

@@ -4,6 +4,7 @@ from matplotlib.image import imread
 from .utils import rot_m, mask_near_horizon, fill_psky_holes
 #from .ray import ray_trace_basic
 from .ray import ray_trace_basic_jax_jit as ray_trace_basic
+from .ray import calc_maxiter
 from .seg import TiledSkyProbSegFormer
 from transformers import pipeline
 import torch
@@ -116,15 +117,17 @@ class HorizonImage:
         #for delta_r_m in 5**np.arange(2, -1, -1):  # This is too coarse: jumps through cliffs
         for delta_r_m in 5**np.arange(1, -1, -1):
             if delta_r_prev is None:
+                max_iter = calc_maxiter(E, N, U, start_point, delta_r_m=delta_r_m)
                 r = ray_trace_basic(E, N, U, start_point, rays_2d,
-                                           delta_r_m=delta_r_m)
+                                           delta_r_m=delta_r_m, max_iter=max_iter)
             else:
                 r_a = ray_trace_basic(E, N, U, start_point, rays_2d,
                         max_iter=int(2 * delta_r_prev / delta_r_m),
                         r_start=(r-delta_r_prev).clip(delta_r_m),
                         delta_r_m=delta_r_m)
+                max_iter = int(np.ceil(delta_r_prev / delta_r_m))
                 r_b = ray_trace_basic(E, N, U, start_point, rays_2d,
-                        r_max=delta_r_prev, delta_r_m=delta_r_m)
+                        max_iter=max_iter, delta_r_m=delta_r_m)
                 r = np.where(np.isnan(r_b), r_a, r_b)
             delta_r_prev = delta_r_m
         r.shape = rays.shape[1:]
