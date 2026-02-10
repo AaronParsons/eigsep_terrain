@@ -2,8 +2,8 @@ import os
 import numpy as np
 from matplotlib.image import imread
 from .utils import rot_m, mask_near_horizon, fill_psky_holes
-#from .ray import ray_trace_basic
-from .ray import ray_trace_basic_jax_jit as ray_trace_basic
+from .ray import ray_trace_basic
+from .ray_jax import ray_trace_basic_jax_jit
 from .ray import calc_maxiter
 from .seg import TiledSkyProbSegFormer
 from transformers import pipeline
@@ -12,8 +12,9 @@ import cv2
 import pymc as pm
 
 PRM_ORDER = ('e', 'n', 'u', 'th', 'ph', 'ti', 'f')
+dtype_r = np.float32
 
-def pixels_to_rays(Nu, Nv, f, uv=None, dtype=np.float32):
+def pixels_to_rays(Nu, Nv, f, uv=None, dtype=dtype_r):
     if uv is None:
         _u = np.arange(Nu, dtype=int)
         _v = np.arange(Nv, dtype=int)
@@ -51,7 +52,7 @@ class HorizonImage:
             self.set_prms(self.meta['best_prms'])
         else:
             self.set_prms([0.0 for k in PRM_ORDER])
-        self.reset_pixel_choice()
+        self._px_choice = None
 
     def set_prms(self, prms):
         self.prms = dict(zip(PRM_ORDER, prms))
@@ -89,7 +90,7 @@ class HorizonImage:
         skymask = np.flipud(npz['skymask'])
         return skymask, psky, ptree
         
-    def get_rays(self, pixels=None, dtype=np.float32):
+    def get_rays(self, pixels=None, dtype=dtype_r):
         z_rays = pixels_to_rays(self.npix_y, self.npix_x,
                                 f=self.prms['f'], uv=pixels, dtype=dtype)
         rm_tilt = rot_m(self.prms['ti'], np.array([0,0,1], dtype=dtype))
@@ -99,16 +100,20 @@ class HorizonImage:
         rays = np.einsum('ij,j...->i...', rm, z_rays)
         return rays
 
-    def choose_pixels(self, N=1000, mask=None):
-        if mask is None:
-            mask = self.horizon_mask
-        x, y = np.where(mask)
-        w = np.exp(-0.5 * self.horizon_dist[x, y]**2 / (self.px_dist / 2)**2)
-        rng = np.random.default_rng()
-        inds = rng.choice(x.size, size=N, replace=False, p=w / w.sum())
-        return (x[inds], y[inds])
+    def choose_pixels(self, N=1000, mask=None, reset=False):
+        if reset:
+            self._px_choice = None
+        if self._px_choice is None:
+            if mask is None:
+                mask = self.horizon_mask
+            x, y = np.where(mask)
+            w = np.exp(-0.5 * self.horizon_dist[x, y]**2 / (self.px_dist / 2)**2)
+            rng = np.random.default_rng()
+            inds = rng.choice(x.size, size=N, replace=False, p=w / w.sum())
+            self._px_choice = (x[inds], y[inds])
+        return self._px_choice
 
-    def ray_distance(self, dem, rays, dtype=np.float32):
+    def ray_distance(self, dem, rays, dtype=dtype_r):
         rays_2d = rays.reshape(rays.shape[0], -1) 
         (E, N), U = dem.get_en(), dem.data
         start_point = np.array([self.prms[k] for k in 'enu'], dtype=dtype)
@@ -133,20 +138,28 @@ class HorizonImage:
         r.shape = rays.shape[1:]
         return r
 
-    def reset_pixel_choice(self):
-        self._px_choice = None
-        self._best_logL = -np.inf
-
     def gen_horizon_mask(self, px_dist=None):
         if px_dist == None:
             px_dist = self.px_dist
         horizon_mask, horizon_dist = mask_near_horizon(self.sky_mask, px_dist)
         return horizon_mask, horizon_dist
+
+    def export_jax(self, n_rays=1000, eps=1e-3, dtype=dtype_r):
+        x_px, y_px = self.choose_pixels(N=n_rays)
+        psky = self.psky[x_px, y_px].astype(dtype).clip(eps, 1-eps)
+        ant_px = np.array(self.meta['ant_px'][::-1], dtype=np.int32)
+        return dict(
+            key=self.key,
+            npix_y=np.int32(self.npix_y),
+            npix_x=np.int32(self.npix_x),
+            x_px=x_px.astype(np.int32),
+            y_px=y_px.astype(np.int32),
+            psky=psky,
+            ant_px=ant_px,
+        )
         
-    def horizon_ray_logL(self, dem, cnt=1000, dtype=np.float32, verbose=False, eps=1e-3):
-        if self._px_choice is None:
-            self._px_choice = self.choose_pixels(N=cnt)
-        x_px, y_px = self._px_choice
+    def horizon_ray_logL(self, dem, n_rays=1000, dtype=dtype_r, eps=1e-3):
+        x_px, y_px = self.choose_pixels(N=n_rays)
         # Per-pixel probability that the pixel is sky
         psky = self.psky[x_px, y_px].clip(eps, 1 - eps) # Avoid log(0)
 
@@ -159,9 +172,6 @@ class HorizonImage:
         logp_sky = np.log(psky)
         logp_ground = np.log1p(-psky)  # stable log(1-psky)
         logL = np.sum(np.where(model_sky, logp_sky, logp_ground))
-        if verbose and logL > getattr(self, "_best_logL", -np.inf):
-            self._best_logL = logL
-            print(f"'best_prms': ({self.prms_str}),  #[LOGL={logL: 6.4f}]", flush=True)
         return logL
 
     def ant_logL(self, ant_pos, box_size):
@@ -209,18 +219,33 @@ class PositionSolver:
         ant_str = f"{self.ant_pos[0]: 7.2f}, {self.ant_pos[1]: 7.2f}, {self.ant_pos[2]: 7.2f}"
         return ',\n'.join(imgs_str + [ant_str])
 
-    def total_logL(self, theta, ray_cnt=None, verbose=False, eps=1e-3):
-        if ray_cnt == None:
-            ray_cnt = self.n_rays
+    def total_logL(self, theta, n_rays=None, eps=1e-3):
+        if n_rays == None:
+            n_rays = self.n_rays
         self.set_mcmc_prms(theta)
         logL_rays = 0.0
         for cnt, img in enumerate(self.fit_imgs):
-            logL_rays += img.horizon_ray_logL(self.dem, cnt=ray_cnt, verbose=False, eps=eps)
+            logL_rays += img.horizon_ray_logL(self.dem, n_rays=n_rays, eps=eps)
         logL_ant = 0
         for img in self.imgs:
             logL_ant += img.ant_logL(self.ant_pos, self.box_size)
         logL = logL_rays + logL_ant 
-        if verbose and logL > getattr(self, "_best_logL", -np.inf):
-            self._best_logL = logL
-            print(f"'best_prms': (\n{self.prms_str}\n),  #[LOGL={logL: 6.4f}]", flush=True)
         return logL
+
+    def export_jax(self, n_rays=None, eps=1e-3, dtype=dtype_r):
+        if n_rays is None:
+            n_rays = self.n_rays
+        dem_pack = self.dem.export_jax(dtype=dtype)
+        fit_statics = [img.export_jax(n_rays=n_rays, eps=eps, dtype=dtype)
+                       for img in self.fit_imgs]
+        all_statics = [img.export_jax(n_rays=n_rays, eps=eps, dtype=dtype)
+                       for img in self.imgs]
+        return dict(
+            dem=dem_pack,
+            fit=fit_statics,
+            all=all_statics,
+            ant_pos_prior=np.asarray(self.ant_pos_prior, dtype=dtype),
+            box_size=dtype(self.box_size),
+            sigmas=np.asarray(self.sigmas, dtype=dtype),
+        )
+

@@ -5,9 +5,10 @@ import PIL.Image
 import os
 import pyuvdata
 import xmltodict
-import healpy
 from .utils import *
 from .ray import ray_trace_basic
+
+dtype = np.float32
 
 XML_CRD_KEYWORDS = ('eastbc', 'westbc', 'northbc', 'southbc')
 
@@ -133,6 +134,16 @@ class DEM(dict):
         else:
             E, N = _E, _N
         return E * self.res, N * self.res, U
+
+    def export_jax(self, dtype=dtype_r):
+        (E, N) = self.get_en()
+        U = self.data
+        return dict(
+            E=np.asarray(E, dtype=dtype),
+            N=np.asarray(N, dtype=dtype),
+            U=np.asarray(U, dtype=dtype),
+        )
+
 
     def zone_of_avoidance_height(self, e_m, n_m, r_zoa=100, decimate=1):
         '''Return the height needed to enforce all terrain is
@@ -283,7 +294,7 @@ class DEM(dict):
         return hangles, crds
 
     def ray_trace(self, start_point, nside, delta_r_m=1,
-                  r_max=None, max_horizon_ang_deg=45, dtype=np.float32):
+                  r_max=None, max_horizon_ang_deg=45, dtype=dtype_r):
         '''Return the distance along a HealPix grid of specified nside from a
         ENU starting point until a ray intersects the terrain, in steps of 
         delta_r_m [m], out to a specified r_max_m (or map edge, if None).
