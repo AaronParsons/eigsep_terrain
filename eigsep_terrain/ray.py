@@ -59,7 +59,7 @@ def ray_trace_basic(E, N, U, start_point, rays, delta_r_m=1,
         r[inds] += delta_r_m
         points_m = points_m[:, active] + dr_vec[:, inds]
         # check if out of bounds
-        active  = (u_m[active] <- u_max)
+        active  = (u_m[active] <= u_max)
         active &= (E[0] <= points_m[0]) & (points_m[0] <= E[-1])
         active &= (N[0] <= points_m[1]) & (points_m[1] <= N[-1])
         r[inds[~active]] = np.nan  # set newly out-of-bounds rays to nan

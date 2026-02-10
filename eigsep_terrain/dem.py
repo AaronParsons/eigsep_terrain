@@ -8,7 +8,7 @@ import xmltodict
 from .utils import *
 from .ray import ray_trace_basic
 
-dtype = np.float32
+dtype_r = np.float32
 
 XML_CRD_KEYWORDS = ('eastbc', 'westbc', 'northbc', 'southbc')
 

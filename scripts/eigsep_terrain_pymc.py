@@ -1,6 +1,6 @@
 import numpy as np
 from eigsep_terrain.marjum_dem import MarjumDEM as DEM
-from eigsep_terrain.img import HorizonImage, PositionSolver, PRM_ORDER
+from eigsep_terrain.img import HorizonImage, PositionSolver, PRM_ORDER, dtype_r
 import pymc as pm
 import pytensor.tensor as pt
 from pytensor.compile.ops import as_op
@@ -48,7 +48,7 @@ for I in _ps.imgs:
     meta[I.key].update({'best_prms': tuple(I.get_prms())})
 
 for k in meta.keys():
-    dem[k] = np.asarray(meta[k]['best_prms'][:3], dtype=np.float32)
+    dem[k] = np.asarray(meta[k]['best_prms'][:3], dtype=dtype_r)
     
 imgs = [HorizonImage(f, meta, px_smooth=150, px_dist=30) for f in files]
 imgs = [img for img in imgs if img.key in meta]
@@ -56,14 +56,14 @@ fit_imgs, static_imgs = imgs, []
 ps = PositionSolver(dem['platform'], fit_imgs, static_imgs, n_rays, dem, box_size=BOX_SIZE)
 ps.set_mcmc_sigmas()
 
-@as_op(itypes=[pt.dvector], otypes=[pt.dscalar])
+@as_op(itypes=[pt.fvector], otypes=[pt.fscalar])
 def total_logp_op(theta):
-    return np.array(ps.total_logL(np.asarray(theta, dtype=float),
-                            verbose=False, eps=1e-2), dtype=float)
+    return np.array(ps.total_logL(np.asarray(theta, dtype=dtype_r),
+                            eps=1e-2), dtype=dtype_r)
     
 with pm.Model() as model:
     prms = ps.get_mcmc_prms()
-    theta = pt.stack(prms)
+    theta = pt.cast(pt.stack(prms), "float32")
     logL = total_logp_op(theta)
     pm.Potential("lik", logL)
 
@@ -75,8 +75,8 @@ with pm.Model() as model:
     )
     
     trace = pm.sample(
-        draws=4500,
-        tune=500,
+        draws=450,
+        tune=50,
         chains=1,
         step=step,
         cores=1,

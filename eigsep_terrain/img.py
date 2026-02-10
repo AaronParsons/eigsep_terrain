@@ -2,8 +2,9 @@ import os
 import numpy as np
 from matplotlib.image import imread
 from .utils import rot_m, mask_near_horizon, fill_psky_holes
-from .ray import ray_trace_basic
-from .ray_jax import ray_trace_basic_jax_jit
+#from .ray import ray_trace_basic
+#from .ray_jax import ray_trace_basic_jax_jit as ray_trace_basic
+from .ray_numba import ray_trace_basic_numba as ray_trace_basic
 from .ray import calc_maxiter
 from .seg import TiledSkyProbSegFormer
 from transformers import pipeline
