@@ -50,7 +50,7 @@ class HorizonImage:
         
         if self.key in meta:
             self.meta = meta[self.key]
-            self.set_prms(self.meta['best_prms'])
+            self.set_prms(self.meta.get('prms', [0.0 for _ in PRM_ORDER]))
         else:
             self.set_prms([0.0 for k in PRM_ORDER])
         self._px_choice = None
