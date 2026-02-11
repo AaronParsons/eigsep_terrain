@@ -103,6 +103,7 @@ def main(argv=None) -> int:
     outfile = f"trace_seed{seed:03d}.nc"
     print(f"RANDOM SEED: {seed}")
     print(f"OUTFILE: {outfile}")
+    assert not os.path.exists(outfile) # make sure file won't be overwritten
 
     # Load DEM
     dem = DEM(cache_file=args.cache_file)
@@ -153,6 +154,16 @@ def main(argv=None) -> int:
 
     with pm.Model() as model:
         prms = ps.get_mcmc_prms()
+        base_start = np.array([p.eval() for p in prms], dtype=dtype_r)
+
+        rng = np.random.default_rng(seed)
+
+        initvals = []
+        for c in range(args.chains):
+            jitter = rng.normal(0.0, ps.sigmas, size=base_start.size)
+            start_c = base_start + jitter
+            initvals.append({p.name: v for p, v in zip(prms, start_c)})
+
         theta = pt.cast(pt.stack(prms), "float32")
         logL = total_logp_op(theta)
         pm.Potential("lik", logL)
@@ -169,10 +180,12 @@ def main(argv=None) -> int:
             tune=args.tune,
             chains=args.chains,
             step=step,
+            initvals=initvals,
             cores=args.cores,
             random_seed=seed,
             progressbar=True,
         )
+
 
     az.to_netcdf(trace, outfile)
     print(f"Accepted step fraction = {float(trace.sample_stats.accepted.mean()): 4.3f}")
