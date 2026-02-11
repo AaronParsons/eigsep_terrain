@@ -82,7 +82,7 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--eps", type=float, default=1e-2)
 
     # Step method params
-    ap.add_argument("--scaling", type=float, default=3e-4)
+    ap.add_argument("--scaling", type=float, default=1e-2)
     ap.add_argument("--tune-interval", type=int, default=50)
 
     # Sampling params
@@ -142,6 +142,7 @@ def main(argv=None) -> int:
         dem,
         box_size=BOX_SIZE,
     )
+    ps.set_mcmc_prms(prms)
     ps.set_mcmc_sigmas()
 
     eps = dtype_r(args.eps)
@@ -159,7 +160,8 @@ def main(argv=None) -> int:
 
         initvals = []
         for c in range(args.chains):
-            jitter = rng.normal(0.0, ps.sigmas, size=prms.size)
+            jitter = rng.normal(0.0, np.asarray(ps.sigmas) * args.scaling,
+                                size=prms.size)
             start_c = prms + jitter
             initvals.append({p.name: v for p, v in zip(mcmc_prms, start_c)})
 
