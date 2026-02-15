@@ -34,6 +34,8 @@ class HorizonImage:
         self.img = np.flipud(imread(self.filename))
         self.px_dist = kwargs.pop('px_dist', 150)  # px_dist from mask_near_horizon
         self.px_smooth = kwargs.pop('px_smooth', 100)  # px_dist from mask_near_horizon
+
+        print(f'DEBUG: self.npzfile: {self.npzfile}')
         
         if not os.path.exists(self.npzfile):
             segdict = self.segment_image()

@@ -68,7 +68,7 @@ def _apply_prms_to_dem_and_meta(
 def build_argparser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache-file", default="marjum_dem.npz")
-    ap.add_argument("--img-glob", default="/home/aparsons/Downloads/IMG_08*.jpg")
+    ap.add_argument("--img-glob", default="/Users/komalkaur/Desktop/eigsep_stuff/hrzn_mapping/imgs/IMG*.jpg")
     ap.add_argument("--seed", type=int, default=None, help="Defaults to random [0,999]")
 
     # HorizonImage params
