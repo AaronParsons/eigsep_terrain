@@ -12,6 +12,7 @@ import pymc as pm
 import arviz as az
 import pytensor.tensor as pt
 from pytensor.compile.ops import as_op
+import matplotlib.pyplot as plt
 
 from eigsep_terrain.marjum_dem import MarjumDEM as DEM
 from eigsep_terrain.img import HorizonImage, PositionSolver, PRM_ORDER, dtype_r 
@@ -189,6 +190,13 @@ def main(argv=None) -> int:
 
 
     az.to_netcdf(trace, outfile)
+
+    # plot
+    axes = az.plot_trace(data=trace, compact=True, legend=True)
+    fig = axes.ravel()[0].get_figure()
+    fig.suptitle(f'seed: {seed}, eps: {float(eps): 4.3f}, scaling: {args.scaling}, tune interval: {args.tune_interval}')
+    plt.savefig(f'trace_{seed}')
+
     print(f"Accepted step fraction = {float(trace.sample_stats.accepted.mean()): 4.3f}")
     return 0
 
