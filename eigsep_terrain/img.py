@@ -11,6 +11,7 @@ from transformers import pipeline
 import torch
 import cv2
 import pymc as pm
+from scipy.ndimage import gaussian_filter
 
 PRM_ORDER = ('e', 'n', 'u', 'th', 'ph', 'ti', 'f')
 dtype_r = np.float32
@@ -34,15 +35,17 @@ class HorizonImage:
         self.img = np.flipud(imread(self.filename))
         self.px_dist = kwargs.pop('px_dist', 150)  # px_dist from mask_near_horizon
         self.px_smooth = kwargs.pop('px_smooth', 100)  # px_dist from mask_near_horizon
+        self.px_tree_sigma = kwargs.pop('px_tree_sigma', 30)
 
         print(f'DEBUG: self.npzfile: {self.npzfile}')
         
         if not os.path.exists(self.npzfile):
             segdict = self.segment_image()
             self.save_segment_image(segdict)
+
         self.sky_mask, _psky, self.ptree = self.read_psky()
         _hmask, _ = self.gen_horizon_mask(px_dist=150)  # XXX manual tuned px_dist
-        maybe_tree = _hmask * self.ptree
+        maybe_tree = _hmask * gaussian_filter(self.ptree, sigma=self.px_tree_sigma)
         psky = np.where(maybe_tree > 0.05, 0.5, _psky)  # XXX manual thresh
         sky, psky_filled = fill_psky_holes(psky, 0.6, 200**2, 8, 50)
         ker = (self.px_smooth, self.px_smooth)
@@ -165,12 +168,17 @@ class HorizonImage:
         x_px, y_px = self.choose_pixels(N=n_rays)
         # Per-pixel probability that the pixel is sky
         psky = self.psky[x_px, y_px].clip(eps, 1 - eps) # Avoid log(0)
+        ptree = self.ptree[x_px, y_px].clip(eps, 1-eps)
 
         # Evaluate your geometric horizon model (binary)
         rays = self.get_rays(pixels=(x_px, y_px), dtype=dtype)
+        print(f'DEBUG: get rays returns {rays}')
         r = self.ray_distance(dem, rays, dtype=dtype)
+        print(f'DEBUG: ray distance on get rays returns {r}')
         model_sky = np.isnan(r)  # True => model predicts sky
+        print(f'DEBUG: model_sky is {model_sky}. if True, model predicts sky')
 
+        # penatly for tree near horizon already accounted for since rays are traced head horizon
         # if model says sky, probability of observing "sky" is psky, else 1-psky
         logp_sky = np.log(psky)
         logp_ground = np.log1p(-psky)  # stable log(1-psky)
