@@ -75,6 +75,7 @@ def build_argparser() -> argparse.ArgumentParser:
     # HorizonImage params
     ap.add_argument("--px-dist", type=int, default=30)
     ap.add_argument("--px-smooth", type=int, default=150)
+    ap.add_argument("--px-tree-sigma", type=int, default=30)
 
     # PositionSolver / ray tracing params
     ap.add_argument("--n-rays", type=int, default=4000)
@@ -116,7 +117,7 @@ def main(argv=None) -> int:
 
     meta = {k: dict(v) for k, v in DEFAULT_META.items()}
     # Build HorizonImage list once (for MCMC)
-    imgs = [HorizonImage(f, meta, px_smooth=args.px_smooth, px_dist=args.px_dist) for f in files]
+    imgs = [HorizonImage(f, meta, px_smooth=args.px_smooth, px_dist=args.px_dist, px_tree_sigma=args.px_tree_sigma) for f in files]
     imgs = [img for img in imgs if img.key in meta]
     if not imgs:
         raise RuntimeError("No images matched keys in meta after loading HorizonImage objects.")
