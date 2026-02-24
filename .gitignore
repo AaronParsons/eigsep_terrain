@@ -9,3 +9,4 @@ notebooks/marjum_dem.npz
 notebooks/old_traces/
 img_seg*.npz
 trace_seed*.nc
+trace*.png
