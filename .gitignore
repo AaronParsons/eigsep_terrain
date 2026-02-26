@@ -4,6 +4,8 @@ eigsep_terrain.egg-info
 .ipynb_checkpoints/
 .DS_Store
 build/
-.DS_Store
 notebooks/marjum_dem.npz
 *marjum_dem.npz
+img_seg*.npz
+trace_seed*.nc
+trace*.png
