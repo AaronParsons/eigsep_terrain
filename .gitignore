@@ -6,6 +6,7 @@ eigsep_terrain.egg-info
 build/
 notebooks/marjum_dem.npz
 *marjum_dem.npz
+notebooks/img_seg*.npz
 img_seg*.npz
 trace_seed*.nc
 trace*.png
