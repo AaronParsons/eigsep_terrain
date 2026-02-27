@@ -6,3 +6,4 @@ from . import ray
 from . import utils
 from . import img
 from . import seg
+from . import plot
