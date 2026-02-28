@@ -314,6 +314,8 @@ class DEM(dict):
         if max_horizon_ang_deg is not None:
             above_horizon = rays[2] > np.sin(np.deg2rad(max_horizon_ang_deg))
             r_start[above_horizon] = np.nan
+        else:
+            above_horizon = np.zeros(rays.shape[1], dtype=bool)
         max_iter = calc_maxiter(E, N, self.data, start_point,
                                 delta_r_m=delta_r_m, r_max=r_max)
         if backend == 'numpy':
@@ -327,12 +329,18 @@ class DEM(dict):
                                          max_iter=max_iter, dtype=dtype)
         elif backend == 'jax':
             from .ray_jax import ray_trace_basic_jax_jit
-            r = ray_trace_basic_jax_jit(
-                E, N, self.data, start_point, rays,
-                delta_r_m=float(delta_r_m), r_start=r_start,
-                max_iter=max_iter,
-            )
-            return np.array(r)
+            # Filter inactive rays before calling: JAX evaluates the body for
+            # all Nr rays every step (lax.while_loop cannot prune dynamically),
+            # so excluding above-horizon rays halves the per-step work.
+            active_mask = ~above_horizon
+            r_full = np.full(rays.shape[1], np.nan, dtype=dtype)
+            if active_mask.any():
+                r_sub = ray_trace_basic_jax_jit(
+                    E, N, self.data, start_point, rays[:, active_mask],
+                    delta_r_m=float(delta_r_m), max_iter=max_iter,
+                )
+                r_full[active_mask] = np.array(r_sub)
+            return r_full
         else:
             raise ValueError(
                 f"Unknown backend {backend!r}. "

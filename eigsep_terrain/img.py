@@ -2,10 +2,7 @@ import os
 import numpy as np
 from matplotlib.image import imread
 from .utils import rot_m, mask_near_horizon, fill_psky_holes
-#from .ray import ray_trace_basic
-#from .ray_jax import ray_trace_basic_jax_jit as ray_trace_basic
-from .ray_numba import ray_trace_basic_numba as ray_trace_basic
-from .ray import calc_maxiter
+from .ray_numba import ray_distance_coarse_to_fine_numba
 from .seg import TiledSkyProbSegFormer
 from transformers import pipeline
 import torch
@@ -115,27 +112,10 @@ class HorizonImage:
         return self._px_choice
 
     def ray_distance(self, dem, rays, dtype=dtype_r):
-        rays_2d = rays.reshape(rays.shape[0], -1) 
+        rays_2d = rays.reshape(rays.shape[0], -1)
         (E, N), U = dem.get_en(), dem.data
         start_point = np.array([self.prms[k] for k in 'enu'], dtype=dtype)
-        delta_r_prev = None
-        # Take coarse (5**1 m) steps, then back up and refine with fine (5**0 m) steps
-        #for delta_r_m in 5**np.arange(2, -1, -1):  # This is too coarse: jumps through cliffs
-        for delta_r_m in 5**np.arange(1, -1, -1):
-            if delta_r_prev is None:
-                max_iter = calc_maxiter(E, N, U, start_point, delta_r_m=delta_r_m)
-                r = ray_trace_basic(E, N, U, start_point, rays_2d,
-                                           delta_r_m=delta_r_m, max_iter=max_iter)
-            else:
-                r_a = ray_trace_basic(E, N, U, start_point, rays_2d,
-                        max_iter=int(2 * delta_r_prev / delta_r_m),
-                        r_start=(r-delta_r_prev).clip(delta_r_m),
-                        delta_r_m=delta_r_m)
-                max_iter = int(np.ceil(delta_r_prev / delta_r_m))
-                r_b = ray_trace_basic(E, N, U, start_point, rays_2d,
-                        max_iter=max_iter, delta_r_m=delta_r_m)
-                r = np.where(np.isnan(r_b), r_a, r_b)
-            delta_r_prev = delta_r_m
+        r = ray_distance_coarse_to_fine_numba(E, N, U, start_point, rays_2d)
         r.shape = rays.shape[1:]
         return r
 
