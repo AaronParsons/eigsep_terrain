@@ -75,7 +75,6 @@ def build_argparser() -> argparse.ArgumentParser:
     # HorizonImage params
     ap.add_argument("--px-dist", type=int, default=30)
     ap.add_argument("--px-smooth", type=int, default=150)
-    ap.add_argument("--px-tree-sigma", type=int, default=30)
 
     # PositionSolver / ray tracing params
     ap.add_argument("--n-rays", type=int, default=4000)
@@ -86,6 +85,7 @@ def build_argparser() -> argparse.ArgumentParser:
     # Step method params
     ap.add_argument("--scaling", type=float, default=1e-2)
     ap.add_argument("--tune-interval", type=int, default=50)
+    ap.add_argument("--jitter-scaling", type=float, default=1.0)
 
     # Sampling params
     ap.add_argument("--draws", type=int, default=4500)
@@ -117,7 +117,7 @@ def main(argv=None) -> int:
 
     meta = {k: dict(v) for k, v in DEFAULT_META.items()}
     # Build HorizonImage list once (for MCMC)
-    imgs = [HorizonImage(f, meta, px_smooth=args.px_smooth, px_dist=args.px_dist, px_tree_sigma=args.px_tree_sigma) for f in files]
+    imgs = [HorizonImage(f, meta, px_smooth=args.px_smooth, px_dist=args.px_dist) for f in files]
     imgs = [img for img in imgs if img.key in meta]
     if not imgs:
         raise RuntimeError("No images matched keys in meta after loading HorizonImage objects.")
@@ -162,7 +162,7 @@ def main(argv=None) -> int:
 
         initvals = []
         for c in range(args.chains):
-            jitter = rng.normal(0.0, np.asarray(ps.sigmas) * args.scaling,
+            jitter = rng.normal(0.0, np.asarray(ps.sigmas) * args.jitter_scaling,
                                 size=prms.size)
             start_c = prms + jitter
             initvals.append({p.name: v for p, v in zip(mcmc_prms, start_c)})
@@ -195,7 +195,7 @@ def main(argv=None) -> int:
     # plot
     axes = az.plot_trace(data=trace, compact=True, legend=True)
     fig = axes.ravel()[0].get_figure()
-    fig.suptitle(f'seed: {seed}, eps: {float(eps): 4.3f}, scaling: {args.scaling}, tune interval: {args.tune_interval}')
+    fig.suptitle(f'seed: {seed}, eps: {float(eps): 4.3f}, scaling: {args.scaling}, jitter scaling: {args.jitter_scaling}, tune interval: {args.tune_interval}')
     plt.savefig(f'trace_{seed}')
 
     print(f"Accepted step fraction = {float(trace.sample_stats.accepted.mean()): 4.3f}")
