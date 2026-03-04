@@ -11,7 +11,6 @@ from transformers import pipeline
 import torch
 import cv2
 import pymc as pm
-from scipy.ndimage import gaussian_filter
 
 PRM_ORDER = ('e', 'n', 'u', 'th', 'ph', 'ti', 'f')
 dtype_r = np.float32
@@ -35,7 +34,6 @@ class HorizonImage:
         self.img = np.flipud(imread(self.filename))
         self.px_dist = kwargs.pop('px_dist', 150)  # px_dist from mask_near_horizon
         self.px_smooth = kwargs.pop('px_smooth', 100)  # px_dist from mask_near_horizon
-        self.px_tree_sigma = kwargs.pop('px_tree_sigma', 30)
 
         print(f'DEBUG: self.npzfile: {self.npzfile}')
         
@@ -168,7 +166,6 @@ class HorizonImage:
         x_px, y_px = self.choose_pixels(N=n_rays)
         # Per-pixel probability that the pixel is sky
         psky = self.psky[x_px, y_px].clip(eps, 1 - eps) # Avoid log(0)
-        ptree = self.ptree[x_px, y_px].clip(eps, 1-eps)
 
         # Evaluate your geometric horizon model (binary)
         rays = self.get_rays(pixels=(x_px, y_px), dtype=dtype)
