@@ -166,7 +166,8 @@ class HorizonImage:
         return logL
     
 class PositionSolver:
-    def __init__(self, ant_pos_prior, fit_imgs, static_imgs, n_rays, dem, ant_pos_err=20, box_size=0.3):
+    def __init__(self, ant_pos_prior, fit_imgs, static_imgs, n_rays, dem,
+                 ant_pos_err=20, box_size=0.3):
         self.fit_imgs = fit_imgs
         self.ant_pos_prior = ant_pos_prior
         self.ant_pos_err = ant_pos_err
@@ -184,9 +185,26 @@ class PositionSolver:
         prms += [pm.Normal(f'ant_{k}', mu=v, sigma=s) for k, v, s in zip('enu', self.ant_pos_prior, self.sigmas[-3:])]
         return prms
 
-    def set_mcmc_prms(self, theta):
+    def set_mcmc_prms(self, theta, min_du=None):
+        theta = list(theta)
+        if min_du is not None:
+            _ei = PRM_ORDER.index('e')
+            _ni = PRM_ORDER.index('n')
+            _ui = PRM_ORDER.index('u')
+            for cnt in range(len(self.fit_imgs)):
+                base = cnt * len(PRM_ORDER)
+                ground = self.dem.interp_alt(
+                    theta[base + _ei], theta[base + _ni]
+                )
+                theta[base + _ui] = max(
+                    theta[base + _ui], float(ground) + min_du
+                )
+            ant_ground = self.dem.interp_alt(theta[-3], theta[-2])
+            theta[-1] = max(theta[-1], float(ant_ground) + min_du)
         for cnt, img in enumerate(self.fit_imgs):
-            img.set_prms(tuple(theta[cnt*len(PRM_ORDER):(cnt+1)*len(PRM_ORDER)]))
+            img.set_prms(
+                tuple(theta[cnt*len(PRM_ORDER):(cnt+1)*len(PRM_ORDER)])
+            )
         self.ant_pos = np.asarray(theta[-3:])
 
     def set_mcmc_sigmas(self, pos_err=30.0, ang_err=np.deg2rad(5.0), f_err=0.1):
