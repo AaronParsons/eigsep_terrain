@@ -45,7 +45,7 @@ class HorizonImage:
 
         self.sky_mask, _psky, self.ptree = self.read_psky()
         _hmask, _ = self.gen_horizon_mask(px_dist=150)  # XXX manual tuned px_dist
-        maybe_tree = _hmask * gaussian_filter(self.ptree, sigma=self.px_tree_sigma)
+        maybe_tree = _hmask * self.ptree
         psky = np.where(maybe_tree > 0.05, 0.5, _psky)  # XXX manual thresh
         sky, psky_filled = fill_psky_holes(psky, 0.6, 200**2, 8, 50)
         ker = (self.px_smooth, self.px_smooth)
@@ -172,11 +172,11 @@ class HorizonImage:
 
         # Evaluate your geometric horizon model (binary)
         rays = self.get_rays(pixels=(x_px, y_px), dtype=dtype)
-        print(f'DEBUG: get rays returns {rays}')
+        # print(f'DEBUG: get rays returns {rays}')
         r = self.ray_distance(dem, rays, dtype=dtype)
-        print(f'DEBUG: ray distance on get rays returns {r}')
+        # print(f'DEBUG: ray distance on get rays returns {r}')
         model_sky = np.isnan(r)  # True => model predicts sky
-        print(f'DEBUG: model_sky is {model_sky}. if True, model predicts sky')
+        # print(f'DEBUG: model_sky is {model_sky}. if True, model predicts sky')
 
         # penatly for tree near horizon already accounted for since rays are traced head horizon
         # if model says sky, probability of observing "sky" is psky, else 1-psky
