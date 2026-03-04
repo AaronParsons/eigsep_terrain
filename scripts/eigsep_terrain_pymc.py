@@ -17,6 +17,7 @@ from eigsep_terrain.marjum_dem import MarjumDEM as DEM
 from eigsep_terrain.img import HorizonImage, PositionSolver, PRM_ORDER, dtype_r 
 
 BOX_SIZE = 0.3  # m
+MIN_DU = 0.5 # m
 
 DEFAULT_META = {
     "0817": {"ant_px": (2 * 1366, 2 * 1221)},
@@ -142,7 +143,7 @@ def main(argv=None) -> int:
         dem,
         box_size=BOX_SIZE,
     )
-    ps.set_mcmc_prms(prms)
+    ps.set_mcmc_prms(prms, min_du=MIN_DU)
     ps.set_mcmc_sigmas()
 
     eps = dtype_r(args.eps)
@@ -162,7 +163,9 @@ def main(argv=None) -> int:
         for c in range(args.chains):
             jitter = rng.normal(0.0, np.asarray(ps.sigmas) * args.scaling,
                                 size=prms.size)
-            start_c = prms + jitter
+            # use min_du in set_mcmc_prms to clamp start position above ground
+            ps.set_mcmc_prms(prms + jitter, min_du=MIN_DU)
+            start_c = ps.get_mcmc_prms()
             initvals.append({p.name: v for p, v in zip(mcmc_prms, start_c)})
 
         theta = pt.cast(pt.stack(mcmc_prms), "float32")
