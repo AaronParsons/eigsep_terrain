@@ -84,6 +84,7 @@ def build_argparser() -> argparse.ArgumentParser:
     # Step method params
     ap.add_argument("--scaling", type=float, default=1e-2)
     ap.add_argument("--tune-interval", type=int, default=50)
+    ap.add_argument("--jitter-scaling", type=float, default=1.0)
 
     # Sampling params
     ap.add_argument("--draws", type=int, default=4500)
@@ -166,7 +167,8 @@ def main(argv=None) -> int:
             + [-1]  # ant_h
         )
         for c in range(args.chains):
-            jitter = rng.normal(0.0, np.asarray(ps.sigmas) * args.scaling,
+
+            jitter = rng.normal(0.0, np.asarray(ps.sigmas) * args.jitter_scaling,
                                 size=prms_h.size)
             jittered = prms_h + jitter
             # h must be non-negative (prior lower=0)
@@ -200,6 +202,16 @@ def main(argv=None) -> int:
 
 
     az.to_netcdf(trace, outfile)
+<<<<<<< HEAD
+=======
+
+    # plot
+    axes = az.plot_trace(data=trace, compact=True, legend=True)
+    fig = axes.ravel()[0].get_figure()
+    fig.suptitle(f'seed: {seed}, eps: {float(eps): 4.3f}, scaling: {args.scaling}, jitter scaling: {args.jitter_scaling}, tune interval: {args.tune_interval}')
+    plt.savefig(f'trace_{seed}')
+
+>>>>>>> ddb392d (add jitter-scaling parameter)
     print(f"Accepted step fraction = {float(trace.sample_stats.accepted.mean()): 4.3f}")
     return 0
 
