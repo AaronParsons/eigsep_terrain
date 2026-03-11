@@ -17,7 +17,6 @@ from eigsep_terrain.marjum_dem import MarjumDEM as DEM
 from eigsep_terrain.img import HorizonImage, PositionSolver, PRM_ORDER, dtype_r 
 
 BOX_SIZE = 0.3  # m
-MIN_DU = 0.5 # m
 
 DEFAULT_META = {
     "0817": {"ant_px": (2 * 1366, 2 * 1221)},
@@ -41,7 +40,7 @@ def _apply_prms_to_dem_and_meta(
     prm_len: int,
 ) -> None:
     """
-    Unpack prms:
+    Unpack prms (absolute u-coordinates):
       - per-image chunks of length prm_len (e,n,u,th,ph,ti,f)
       - last 3 numbers are platform (ant_e, ant_n, ant_u)
     """
@@ -124,13 +123,13 @@ def main(argv=None) -> int:
     fit_imgs, static_imgs = imgs, []
     img_keys = [img.key for img in fit_imgs]
 
-    prms = np.asarray(DEFAULT_PRMS, dtype=dtype_r)
+    prms_u = np.asarray(DEFAULT_PRMS, dtype=dtype_r)
 
     _apply_prms_to_dem_and_meta(
         dem=dem,
         meta=meta,
         img_keys_in_fit_order=img_keys,
-        prms=prms,
+        prms=prms_u,
         prm_len=len(PRM_ORDER),
     )
     platform = dem["platform"]
@@ -143,7 +142,8 @@ def main(argv=None) -> int:
         dem,
         box_size=BOX_SIZE,
     )
-    ps.set_mcmc_prms(prms, min_du=MIN_DU)
+    prms_h = ps.prms_u_to_h(prms_u)
+    ps.set_mcmc_prms(prms_h)
     ps.set_mcmc_sigmas()
 
     eps = dtype_r(args.eps)
@@ -160,12 +160,20 @@ def main(argv=None) -> int:
         rng = np.random.default_rng(seed)
 
         initvals = []
+        _ui = PRM_ORDER.index('u')
+        h_indices = (
+            [cnt * len(PRM_ORDER) + _ui for cnt in range(len(fit_imgs))]
+            + [-1]  # ant_h
+        )
         for c in range(args.chains):
             jitter = rng.normal(0.0, np.asarray(ps.sigmas) * args.scaling,
-                                size=prms.size)
-            # use min_du in set_mcmc_prms to clamp start position above ground
-            ps.set_mcmc_prms(prms + jitter, min_du=MIN_DU)
-            start_c = ps.get_mcmc_prms()
+                                size=prms_h.size)
+            jittered = prms_h + jitter
+            # h must be non-negative (prior lower=0)
+            for idx in h_indices:
+                jittered[idx] = max(jittered[idx], 0.0)
+            ps.set_mcmc_prms(jittered)
+            start_c = ps.eval_cur_prms()
             initvals.append({p.name: v for p, v in zip(mcmc_prms, start_c)})
 
         theta = pt.cast(pt.stack(mcmc_prms), "float32")

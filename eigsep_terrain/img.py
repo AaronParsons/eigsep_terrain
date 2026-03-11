@@ -176,36 +176,85 @@ class PositionSolver:
         self.dem = dem
         self.n_rays = n_rays
 
+    def eval_cur_prms(self):
+        prms = []
+        for cnt, img in enumerate(self.fit_imgs):
+            for k in PRM_ORDER:
+                if k == 'u':
+                    u0 = float(self.dem.interp_alt(
+                        img.prms['e'], img.prms['n']
+                    ))
+                    h = img.prms['u'] - u0
+                    prms.append(h)
+                else:
+                    prms.append(img.prms[k])
+        ant_e, ant_n, ant_u = self.ant_pos_prior
+        ant_u0 = float(self.dem.interp_alt(ant_e, ant_n))
+        ant_h = ant_u - ant_u0
+        ant_sig_e, ant_sig_n, ant_sig_u = self.sigmas[-3:]
+        prms += [ant_e, ant_n, ant_h]
+        return prms
+
     def get_mcmc_prms(self):
         prms = []
         for cnt, img in enumerate(self.fit_imgs):
-            _sigmas = self.sigmas[cnt*len(PRM_ORDER): (cnt+1)*len(PRM_ORDER)]
-            prms += [pm.Normal(f"{img.key}_{k}", mu=img.prms[k], sigma=sig) for k, sig in zip(PRM_ORDER, _sigmas)]     
-
-        prms += [pm.Normal(f'ant_{k}', mu=v, sigma=s) for k, v, s in zip('enu', self.ant_pos_prior, self.sigmas[-3:])]
+            _sigmas = self.sigmas[
+                cnt*len(PRM_ORDER): (cnt+1)*len(PRM_ORDER)
+            ]
+            for k, sig in zip(PRM_ORDER, _sigmas):
+                if k == 'u':
+                    u0 = float(self.dem.interp_alt(
+                        img.prms['e'], img.prms['n']
+                    ))
+                    h = img.prms['u'] - u0
+                    prms.append(pm.TruncatedNormal(
+                        f"{img.key}_h", mu=h, sigma=sig, lower=0
+                    ))
+                else:
+                    prms.append(
+                        pm.Normal(f"{img.key}_{k}", mu=img.prms[k],
+                                  sigma=sig)
+                    )
+        ant_e, ant_n, ant_u = self.ant_pos_prior
+        ant_u0 = float(self.dem.interp_alt(ant_e, ant_n))
+        ant_h = ant_u - ant_u0
+        ant_sig_e, ant_sig_n, ant_sig_u = self.sigmas[-3:]
+        prms += [
+            pm.Normal('ant_e', mu=ant_e, sigma=ant_sig_e),
+            pm.Normal('ant_n', mu=ant_n, sigma=ant_sig_n),
+            pm.TruncatedNormal('ant_h', mu=ant_h, sigma=ant_sig_u,
+                               lower=0),
+        ]
         return prms
 
-    def set_mcmc_prms(self, theta, min_du=None):
-        theta = list(theta)
-        if min_du is not None:
-            _ei = PRM_ORDER.index('e')
-            _ni = PRM_ORDER.index('n')
-            _ui = PRM_ORDER.index('u')
-            for cnt in range(len(self.fit_imgs)):
-                base = cnt * len(PRM_ORDER)
-                ground = self.dem.interp_alt(
-                    theta[base + _ei], theta[base + _ni]
-                )
-                theta[base + _ui] = max(
-                    theta[base + _ui], float(ground) + min_du
-                )
-            ant_ground = self.dem.interp_alt(theta[-3], theta[-2])
-            theta[-1] = max(theta[-1], float(ant_ground) + min_du)
+    def set_mcmc_prms(self, theta_h):
+        """Set parameters from theta, which uses h (height above ground)
+        at the u position for each camera and for the antenna."""
+        theta_u = self._convert_uh_prms(theta_h, sign=1)
         for cnt, img in enumerate(self.fit_imgs):
             img.set_prms(
-                tuple(theta[cnt*len(PRM_ORDER):(cnt+1)*len(PRM_ORDER)])
+                tuple(theta_u[cnt*len(PRM_ORDER):(cnt+1)*len(PRM_ORDER)])
             )
-        self.ant_pos = np.asarray(theta[-3:])
+        self.ant_pos = np.asarray(theta_u[-3:])
+
+    def prms_u_to_h(self, theta_u):
+        """Convert a flat parameter vector from absolute-u to h
+        (height above ground) at the u position for each camera and
+        for the antenna. Returns a new float32 array."""
+        return self._convert_uh_prms(theta_u, sign=-1)
+
+    def _convert_uh_prms(self, theta_u, sign=1):
+        theta_h = np.array(theta_u, dtype=dtype_r)
+        _ei = PRM_ORDER.index('e')
+        _ni = PRM_ORDER.index('n')
+        _ui = PRM_ORDER.index('u')
+        for cnt in range(len(self.fit_imgs)):
+            base = cnt * len(PRM_ORDER)
+            e, n = theta_h[base + _ei], theta_h[base + _ni]
+            theta_h[base + _ui] += sign * float(self.dem.interp_alt(e, n))
+        ant_e, ant_n = theta_h[-3], theta_h[-2]
+        theta_h[-1] += sign * float(self.dem.interp_alt(ant_e, ant_n))
+        return theta_h
 
     def set_mcmc_sigmas(self, pos_err=30.0, ang_err=np.deg2rad(5.0), f_err=0.1):
         img_sigmas = (pos_err, pos_err, pos_err, ang_err, ang_err, ang_err, f_err)
