@@ -40,7 +40,7 @@ def _apply_prms_to_dem_and_meta(
     prm_len: int,
 ) -> None:
     """
-    Unpack prms:
+    Unpack prms (absolute u-coordinates):
       - per-image chunks of length prm_len (e,n,u,th,ph,ti,f)
       - last 3 numbers are platform (ant_e, ant_n, ant_u)
     """
@@ -84,6 +84,7 @@ def build_argparser() -> argparse.ArgumentParser:
     # Step method params
     ap.add_argument("--scaling", type=float, default=1e-2)
     ap.add_argument("--tune-interval", type=int, default=50)
+    ap.add_argument("--jitter-scaling", type=float, default=1.0)
 
     # Sampling params
     ap.add_argument("--draws", type=int, default=4500)
@@ -123,13 +124,13 @@ def main(argv=None) -> int:
     fit_imgs, static_imgs = imgs, []
     img_keys = [img.key for img in fit_imgs]
 
-    prms = np.asarray(DEFAULT_PRMS, dtype=dtype_r)
+    prms_u = np.asarray(DEFAULT_PRMS, dtype=dtype_r)
 
     _apply_prms_to_dem_and_meta(
         dem=dem,
         meta=meta,
         img_keys_in_fit_order=img_keys,
-        prms=prms,
+        prms=prms_u,
         prm_len=len(PRM_ORDER),
     )
     platform = dem["platform"]
@@ -142,16 +143,20 @@ def main(argv=None) -> int:
         dem,
         box_size=BOX_SIZE,
     )
-    ps.set_mcmc_prms(prms)
+    prms_h = ps.prms_u_to_h(prms_u)
+    ps.set_mcmc_prms(prms_h)
     ps.set_mcmc_sigmas()
 
     eps = dtype_r(args.eps)
 
     @as_op(itypes=[pt.fvector], otypes=[pt.fscalar])
     def total_logp_op(theta):
-        return np.asarray(ps.total_logL(
-                          np.asarray(theta, dtype=dtype_r), eps=eps),
-                          dtype=dtype_r)
+        try:
+            return np.asarray(ps.total_logL(
+                              np.asarray(theta, dtype=dtype_r), eps=eps),
+                              dtype=dtype_r)
+        except (ValueError, FloatingPointError):
+            return np.asarray(-np.inf, dtype=dtype_r)
 
     with pm.Model() as model:
         mcmc_prms = ps.get_mcmc_prms()
@@ -160,9 +165,11 @@ def main(argv=None) -> int:
 
         initvals = []
         for c in range(args.chains):
-            jitter = rng.normal(0.0, np.asarray(ps.sigmas) * args.scaling,
-                                size=prms.size)
-            start_c = prms + jitter
+            jitter = rng.normal(0.0, np.asarray(ps.sigmas) * args.jitter_scaling,
+                                size=prms_h.size)
+            jittered = prms_h + jitter
+            ps.set_mcmc_prms(jittered)
+            start_c = ps.eval_cur_prms()
             initvals.append({p.name: v for p, v in zip(mcmc_prms, start_c)})
 
         theta = pt.cast(pt.stack(mcmc_prms), "float32")
@@ -189,6 +196,7 @@ def main(argv=None) -> int:
 
 
     az.to_netcdf(trace, outfile)
+
     print(f"Accepted step fraction = {float(trace.sample_stats.accepted.mean()): 4.3f}")
     return 0
 

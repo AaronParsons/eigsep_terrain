@@ -4,7 +4,8 @@ import os
 import pytest
 import numpy as np
 import healpy
-from eigsep_terrain.ray import ray_trace_basic, healpix_rays, calc_maxiter
+from eigsep_terrain.ray import (ray_trace_basic, healpix_rays, calc_maxiter,
+                                  ray_distance_coarse_to_fine)
 
 
 class TestUtils:
@@ -144,3 +145,41 @@ def test_ray_trace_basic_sloped_plane_vertical_ray(dtype):
     ground = a * x0 + b * y0
     expected = (z0 - ground)
     assert abs(r[0] - expected) <= float(delta) * 1.05
+
+
+def test_ray_distance_coarse_to_fine_flat_ground():
+    """Coarse-to-fine result agrees with analytic hit on flat ground."""
+    dtype = np.float32
+    E = np.linspace(-10, 10, 256, dtype=dtype)
+    N = np.linspace(-10, 10, 256, dtype=dtype)
+    U = np.zeros((256, 256), dtype=dtype)
+    start = np.array([0., 0., 2.], dtype=dtype)
+
+    rays = np.array([[0., 0.1, 0.], [0., 0., 0.1], [-1., -1., -0.5]],
+                    dtype=dtype)
+    rays = rays / np.linalg.norm(rays, axis=0, keepdims=True)
+
+    r = ray_distance_coarse_to_fine(E, N, U, start, rays,
+                                    coarse_delta=0.5, fine_delta=0.1)
+
+    assert r.shape == (3,)
+    assert np.all(np.isfinite(r))
+    # analytic: downward ray hits U=0 at r = z0 / |ray_z|
+    expected = start[2] / np.abs(rays[2])
+    np.testing.assert_allclose(r, expected, atol=0.5)
+
+
+def test_ray_distance_coarse_to_fine_sky_rays_are_nan():
+    """Upward rays have no intersection and must return NaN."""
+    dtype = np.float32
+    E = np.linspace(-10, 10, 128, dtype=dtype)
+    N = np.linspace(-10, 10, 128, dtype=dtype)
+    U = np.zeros((128, 128), dtype=dtype)
+    start = np.array([0., 0., 1.], dtype=dtype)
+
+    rays = np.array([[0., 0.1], [0., 0.], [1., 0.5]], dtype=dtype)
+    rays = rays / np.linalg.norm(rays, axis=0, keepdims=True)
+
+    r = ray_distance_coarse_to_fine(E, N, U, start, rays,
+                                    coarse_delta=1.0, fine_delta=0.2)
+    assert np.all(np.isnan(r))

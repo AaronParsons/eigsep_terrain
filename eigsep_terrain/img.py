@@ -2,10 +2,7 @@ import os
 import numpy as np
 from matplotlib.image import imread
 from .utils import rot_m, mask_near_horizon, fill_psky_holes
-#from .ray import ray_trace_basic
-#from .ray_jax import ray_trace_basic_jax_jit as ray_trace_basic
-from .ray_numba import ray_trace_basic_numba as ray_trace_basic
-from .ray import calc_maxiter
+from .ray_numba import ray_distance_coarse_to_fine_numba
 from .seg import TiledSkyProbSegFormer
 from transformers import pipeline
 import torch
@@ -115,27 +112,10 @@ class HorizonImage:
         return self._px_choice
 
     def ray_distance(self, dem, rays, dtype=dtype_r):
-        rays_2d = rays.reshape(rays.shape[0], -1) 
+        rays_2d = rays.reshape(rays.shape[0], -1)
         (E, N), U = dem.get_en(), dem.data
         start_point = np.array([self.prms[k] for k in 'enu'], dtype=dtype)
-        delta_r_prev = None
-        # Take coarse (5**1 m) steps, then back up and refine with fine (5**0 m) steps
-        #for delta_r_m in 5**np.arange(2, -1, -1):  # This is too coarse: jumps through cliffs
-        for delta_r_m in 5**np.arange(1, -1, -1):
-            if delta_r_prev is None:
-                max_iter = calc_maxiter(E, N, U, start_point, delta_r_m=delta_r_m)
-                r = ray_trace_basic(E, N, U, start_point, rays_2d,
-                                           delta_r_m=delta_r_m, max_iter=max_iter)
-            else:
-                r_a = ray_trace_basic(E, N, U, start_point, rays_2d,
-                        max_iter=int(2 * delta_r_prev / delta_r_m),
-                        r_start=(r-delta_r_prev).clip(delta_r_m),
-                        delta_r_m=delta_r_m)
-                max_iter = int(np.ceil(delta_r_prev / delta_r_m))
-                r_b = ray_trace_basic(E, N, U, start_point, rays_2d,
-                        max_iter=max_iter, delta_r_m=delta_r_m)
-                r = np.where(np.isnan(r_b), r_a, r_b)
-            delta_r_prev = delta_r_m
+        r = ray_distance_coarse_to_fine_numba(E, N, U, start_point, rays_2d)
         r.shape = rays.shape[1:]
         return r
 
@@ -186,7 +166,8 @@ class HorizonImage:
         return logL
     
 class PositionSolver:
-    def __init__(self, ant_pos_prior, fit_imgs, static_imgs, n_rays, dem, ant_pos_err=20, box_size=0.3):
+    def __init__(self, ant_pos_prior, fit_imgs, static_imgs, n_rays, dem,
+                 ant_pos_err=20, box_size=0.3):
         self.fit_imgs = fit_imgs
         self.ant_pos_prior = ant_pos_prior
         self.ant_pos_err = ant_pos_err
@@ -195,24 +176,110 @@ class PositionSolver:
         self.dem = dem
         self.n_rays = n_rays
 
+    def eval_cur_prms(self):
+        prms = []
+        for cnt, img in enumerate(self.fit_imgs):
+            for k in PRM_ORDER:
+                if k == 'u':
+                    u0 = float(self.dem.interp_alt(
+                        img.prms['e'], img.prms['n']
+                    ))
+                    h = img.prms['u'] - u0
+                    prms.append(np.log(max(h, 1e-3)))
+                else:
+                    prms.append(img.prms[k])
+        ant_e, ant_n, ant_u = self.ant_pos_prior
+        ant_u0 = float(self.dem.interp_alt(ant_e, ant_n))
+        ant_h = ant_u - ant_u0
+        prms += [ant_e, ant_n, np.log(max(ant_h, 1e-3))]
+        return prms
+
     def get_mcmc_prms(self):
         prms = []
         for cnt, img in enumerate(self.fit_imgs):
-            _sigmas = self.sigmas[cnt*len(PRM_ORDER): (cnt+1)*len(PRM_ORDER)]
-            prms += [pm.Normal(f"{img.key}_{k}", mu=img.prms[k], sigma=sig) for k, sig in zip(PRM_ORDER, _sigmas)]     
-
-        prms += [pm.Normal(f'ant_{k}', mu=v, sigma=s) for k, v, s in zip('enu', self.ant_pos_prior, self.sigmas[-3:])]
+            _sigmas = self.sigmas[
+                cnt*len(PRM_ORDER): (cnt+1)*len(PRM_ORDER)
+            ]
+            for k, sig in zip(PRM_ORDER, _sigmas):
+                if k == 'u':
+                    u0 = float(self.dem.interp_alt(
+                        img.prms['e'], img.prms['n']
+                    ))
+                    h = img.prms['u'] - u0
+                    prms.append(pm.Normal(
+                        f"{img.key}_log_h",
+                        mu=np.log(max(h, 1e-3)),
+                        sigma=sig,
+                    ))
+                else:
+                    prms.append(
+                        pm.Normal(f"{img.key}_{k}", mu=img.prms[k],
+                                  sigma=sig)
+                    )
+        ant_e, ant_n, ant_u = self.ant_pos_prior
+        ant_u0 = float(self.dem.interp_alt(ant_e, ant_n))
+        ant_h = ant_u - ant_u0
+        ant_sig_e, ant_sig_n, ant_sig_u = self.sigmas[-3:]
+        prms += [
+            pm.Normal('ant_e', mu=ant_e, sigma=ant_sig_e),
+            pm.Normal('ant_n', mu=ant_n, sigma=ant_sig_n),
+            pm.Normal('ant_log_h', mu=np.log(max(ant_h, 1e-3)),
+                      sigma=ant_sig_u),
+        ]
         return prms
 
-    def set_mcmc_prms(self, theta):
+    def set_mcmc_prms(self, theta_h):
+        """Set parameters from theta, which uses h (height above ground)
+        at the u position for each camera and for the antenna."""
+        theta_u = self._convert_uh_prms(theta_h, sign=1)
         for cnt, img in enumerate(self.fit_imgs):
-            img.set_prms(tuple(theta[cnt*len(PRM_ORDER):(cnt+1)*len(PRM_ORDER)]))
-        self.ant_pos = np.asarray(theta[-3:])
+            img.set_prms(
+                tuple(theta_u[cnt*len(PRM_ORDER):(cnt+1)*len(PRM_ORDER)])
+            )
+        self.ant_pos = np.asarray(theta_u[-3:])
 
-    def set_mcmc_sigmas(self, pos_err=30.0, ang_err=np.deg2rad(5.0), f_err=0.1):
-        img_sigmas = (pos_err, pos_err, pos_err, ang_err, ang_err, ang_err, f_err)
-        self.sigmas = [img.prms[k] * sig if k == 'f' else sig for img in self.fit_imgs for k, sig in zip(PRM_ORDER, img_sigmas)]
-        self.sigmas += [pos_err, pos_err, pos_err]
+    def prms_u_to_h(self, theta_u):
+        """Convert a flat parameter vector from absolute-u to h
+        (height above ground) at the u position for each camera and
+        for the antenna. Returns a new float32 array."""
+        return self._convert_uh_prms(theta_u, sign=-1)
+
+    def _convert_uh_prms(self, theta_in, sign=1):
+        """Convert between log_h and absolute-u representations.
+
+        sign=+1 (set_mcmc_prms): theta_in has log_h; output has u = exp(log_h) + u0.
+        sign=-1 (prms_u_to_h):   theta_in has u;     output has log_h = log(u - u0).
+        """
+        theta = np.array(theta_in, dtype=dtype_r)
+        _ei = PRM_ORDER.index('e')
+        _ni = PRM_ORDER.index('n')
+        _ui = PRM_ORDER.index('u')
+        for cnt in range(len(self.fit_imgs)):
+            base = cnt * len(PRM_ORDER)
+            e, n = theta[base + _ei], theta[base + _ni]
+            u0 = float(self.dem.interp_alt(e, n))
+            if sign == 1:
+                theta[base + _ui] = np.exp(theta[base + _ui]) + u0
+            else:
+                theta[base + _ui] = np.log(
+                    max(theta[base + _ui] - u0, dtype_r(1e-3))
+                )
+        ant_e, ant_n = theta[-3], theta[-2]
+        ant_u0 = float(self.dem.interp_alt(ant_e, ant_n))
+        if sign == 1:
+            theta[-1] = np.exp(theta[-1]) + ant_u0
+        else:
+            theta[-1] = np.log(max(theta[-1] - ant_u0, dtype_r(1e-3)))
+        return theta
+
+    def set_mcmc_sigmas(self, pos_err=30.0, ang_err=np.deg2rad(5.0),
+                        f_err=0.1, log_h_sigma=1.0):
+        img_sigmas = (pos_err, pos_err, log_h_sigma,
+                      ang_err, ang_err, ang_err, f_err)
+        self.sigmas = [img.prms[k] * sig if k == 'f' else sig
+                       for img in self.fit_imgs
+                       for k, sig in zip(PRM_ORDER, img_sigmas)]
+        self.sigmas += [pos_err, pos_err, log_h_sigma]
 
     @property
     def prms_str(self):

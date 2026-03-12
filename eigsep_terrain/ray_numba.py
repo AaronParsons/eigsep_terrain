@@ -1,6 +1,7 @@
 # ray_numba.py (or inside ray.py guarded by try/except ImportError)
 
 import numpy as np
+from .ray import calc_maxiter
 
 dtype_r = np.float32
 
@@ -112,3 +113,27 @@ def ray_trace_basic_numba(E, N, U, start_point, rays, delta_r_m=1.0,
 
     delta = dtype_r(delta_r_m)
     return _ray_trace_basic_numba(E, N, U, start_point, rays, delta, rs, int(max_iter))
+
+
+def ray_distance_coarse_to_fine_numba(E, N, U, start_point, rays,
+                                       coarse_delta=5.0, fine_delta=1.0,
+                                       dtype=dtype_r):
+    '''Two-pass coarse-to-fine ray trace using the Numba backend. First pass
+    uses coarse_delta step size; the second pass refines from just before the
+    coarse hit using fine_delta. Returns distances in rays.shape[1:], NaN for
+    misses.'''
+    if nb is None:
+        raise ImportError("numba not installed")
+    max_iter_coarse = calc_maxiter(E, N, U, start_point, delta_r_m=coarse_delta)
+    r_coarse = ray_trace_basic_numba(E, N, U, start_point, rays,
+                                     delta_r_m=coarse_delta,
+                                     max_iter=max_iter_coarse, dtype=dtype)
+    r_start = np.where(
+        np.isnan(r_coarse),
+        np.nan,
+        np.maximum(r_coarse - dtype(coarse_delta), dtype(fine_delta)),
+    ).astype(dtype)
+    max_iter_fine = int(np.ceil(2 * coarse_delta / fine_delta))
+    return ray_trace_basic_numba(E, N, U, start_point, rays,
+                                 delta_r_m=fine_delta, r_start=r_start,
+                                 max_iter=max_iter_fine, dtype=dtype)
