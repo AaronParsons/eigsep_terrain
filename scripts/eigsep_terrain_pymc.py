@@ -151,9 +151,12 @@ def main(argv=None) -> int:
 
     @as_op(itypes=[pt.fvector], otypes=[pt.fscalar])
     def total_logp_op(theta):
-        return np.asarray(ps.total_logL(
-                          np.asarray(theta, dtype=dtype_r), eps=eps),
-                          dtype=dtype_r)
+        try:
+            return np.asarray(ps.total_logL(
+                              np.asarray(theta, dtype=dtype_r), eps=eps),
+                              dtype=dtype_r)
+        except (ValueError, FloatingPointError):
+            return np.asarray(-np.inf, dtype=dtype_r)
 
     with pm.Model() as model:
         mcmc_prms = ps.get_mcmc_prms()
@@ -161,19 +164,10 @@ def main(argv=None) -> int:
         rng = np.random.default_rng(seed)
 
         initvals = []
-        _ui = PRM_ORDER.index('u')
-        h_indices = (
-            [cnt * len(PRM_ORDER) + _ui for cnt in range(len(fit_imgs))]
-            + [-1]  # ant_h
-        )
         for c in range(args.chains):
-
             jitter = rng.normal(0.0, np.asarray(ps.sigmas) * args.jitter_scaling,
                                 size=prms_h.size)
             jittered = prms_h + jitter
-            # h must be non-negative (prior lower=0)
-            for idx in h_indices:
-                jittered[idx] = max(jittered[idx], 0.0)
             ps.set_mcmc_prms(jittered)
             start_c = ps.eval_cur_prms()
             initvals.append({p.name: v for p, v in zip(mcmc_prms, start_c)})
@@ -202,16 +196,7 @@ def main(argv=None) -> int:
 
 
     az.to_netcdf(trace, outfile)
-<<<<<<< HEAD
-=======
 
-    # plot
-    axes = az.plot_trace(data=trace, compact=True, legend=True)
-    fig = axes.ravel()[0].get_figure()
-    fig.suptitle(f'seed: {seed}, eps: {float(eps): 4.3f}, scaling: {args.scaling}, jitter scaling: {args.jitter_scaling}, tune interval: {args.tune_interval}')
-    plt.savefig(f'trace_{seed}')
-
->>>>>>> ddb392d (add jitter-scaling parameter)
     print(f"Accepted step fraction = {float(trace.sample_stats.accepted.mean()): 4.3f}")
     return 0
 

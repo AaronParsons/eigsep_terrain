@@ -185,14 +185,13 @@ class PositionSolver:
                         img.prms['e'], img.prms['n']
                     ))
                     h = img.prms['u'] - u0
-                    prms.append(h)
+                    prms.append(np.log(max(h, 1e-3)))
                 else:
                     prms.append(img.prms[k])
         ant_e, ant_n, ant_u = self.ant_pos_prior
         ant_u0 = float(self.dem.interp_alt(ant_e, ant_n))
         ant_h = ant_u - ant_u0
-        ant_sig_e, ant_sig_n, ant_sig_u = self.sigmas[-3:]
-        prms += [ant_e, ant_n, ant_h]
+        prms += [ant_e, ant_n, np.log(max(ant_h, 1e-3))]
         return prms
 
     def get_mcmc_prms(self):
@@ -207,8 +206,10 @@ class PositionSolver:
                         img.prms['e'], img.prms['n']
                     ))
                     h = img.prms['u'] - u0
-                    prms.append(pm.TruncatedNormal(
-                        f"{img.key}_h", mu=h, sigma=sig, lower=0
+                    prms.append(pm.Normal(
+                        f"{img.key}_log_h",
+                        mu=np.log(max(h, 1e-3)),
+                        sigma=sig,
                     ))
                 else:
                     prms.append(
@@ -222,8 +223,8 @@ class PositionSolver:
         prms += [
             pm.Normal('ant_e', mu=ant_e, sigma=ant_sig_e),
             pm.Normal('ant_n', mu=ant_n, sigma=ant_sig_n),
-            pm.TruncatedNormal('ant_h', mu=ant_h, sigma=ant_sig_u,
-                               lower=0),
+            pm.Normal('ant_log_h', mu=np.log(max(ant_h, 1e-3)),
+                      sigma=ant_sig_u),
         ]
         return prms
 
@@ -243,23 +244,42 @@ class PositionSolver:
         for the antenna. Returns a new float32 array."""
         return self._convert_uh_prms(theta_u, sign=-1)
 
-    def _convert_uh_prms(self, theta_u, sign=1):
-        theta_h = np.array(theta_u, dtype=dtype_r)
+    def _convert_uh_prms(self, theta_in, sign=1):
+        """Convert between log_h and absolute-u representations.
+
+        sign=+1 (set_mcmc_prms): theta_in has log_h; output has u = exp(log_h) + u0.
+        sign=-1 (prms_u_to_h):   theta_in has u;     output has log_h = log(u - u0).
+        """
+        theta = np.array(theta_in, dtype=dtype_r)
         _ei = PRM_ORDER.index('e')
         _ni = PRM_ORDER.index('n')
         _ui = PRM_ORDER.index('u')
         for cnt in range(len(self.fit_imgs)):
             base = cnt * len(PRM_ORDER)
-            e, n = theta_h[base + _ei], theta_h[base + _ni]
-            theta_h[base + _ui] += sign * float(self.dem.interp_alt(e, n))
-        ant_e, ant_n = theta_h[-3], theta_h[-2]
-        theta_h[-1] += sign * float(self.dem.interp_alt(ant_e, ant_n))
-        return theta_h
+            e, n = theta[base + _ei], theta[base + _ni]
+            u0 = float(self.dem.interp_alt(e, n))
+            if sign == 1:
+                theta[base + _ui] = np.exp(theta[base + _ui]) + u0
+            else:
+                theta[base + _ui] = np.log(
+                    max(theta[base + _ui] - u0, dtype_r(1e-3))
+                )
+        ant_e, ant_n = theta[-3], theta[-2]
+        ant_u0 = float(self.dem.interp_alt(ant_e, ant_n))
+        if sign == 1:
+            theta[-1] = np.exp(theta[-1]) + ant_u0
+        else:
+            theta[-1] = np.log(max(theta[-1] - ant_u0, dtype_r(1e-3)))
+        return theta
 
-    def set_mcmc_sigmas(self, pos_err=30.0, ang_err=np.deg2rad(5.0), f_err=0.1):
-        img_sigmas = (pos_err, pos_err, pos_err, ang_err, ang_err, ang_err, f_err)
-        self.sigmas = [img.prms[k] * sig if k == 'f' else sig for img in self.fit_imgs for k, sig in zip(PRM_ORDER, img_sigmas)]
-        self.sigmas += [pos_err, pos_err, pos_err]
+    def set_mcmc_sigmas(self, pos_err=30.0, ang_err=np.deg2rad(5.0),
+                        f_err=0.1, log_h_sigma=1.0):
+        img_sigmas = (pos_err, pos_err, log_h_sigma,
+                      ang_err, ang_err, ang_err, f_err)
+        self.sigmas = [img.prms[k] * sig if k == 'f' else sig
+                       for img in self.fit_imgs
+                       for k, sig in zip(PRM_ORDER, img_sigmas)]
+        self.sigmas += [pos_err, pos_err, log_h_sigma]
 
     @property
     def prms_str(self):
