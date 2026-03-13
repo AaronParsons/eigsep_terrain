@@ -6,7 +6,11 @@ eigsep_terrain.egg-info
 build/
 notebooks/marjum_dem.npz
 *marjum_dem.npz
+<<<<<<< HEAD
 notebooks/old_traces/
+=======
+notebooks/img_seg*.npz
+>>>>>>> 82214cbd20770232cf32ff1b1e6b54fb25933bdc
 img_seg*.npz
 trace_seed*.nc
 trace*.png

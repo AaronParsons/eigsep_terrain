@@ -18,6 +18,10 @@ def calc_maxiter(E, N, U, start_point, delta_r_m=1, r_max=None, dtype=dtype_r):
                             [E[-1], N[0],  U[0, -1]],
                             [E[-1], N[-1], U[-1, -1]]], dtype=dtype)
         r_max = np.linalg.norm(corners - start_point[None, :], axis=1).max()
+    if np.isnan(r_max):
+        raise ValueError(
+            f"r_max is NaN; start_point={start_point} may be outside DEM."
+        )
     return int(np.ceil(r_max / delta_r_m))
 
 def ray_trace_basic(E, N, U, start_point, rays, delta_r_m=1,
