@@ -24,14 +24,16 @@ def pixels_to_rays(Nu, Nv, f, uv=None, dtype=dtype_r):
 
 
 class HorizonImage:
-    def __init__(self, filename, meta={}, **kwargs):
+    def __init__(self, filename, meta=None, **kwargs):
+        if meta is None:
+            meta = {}
         self.filename = filename
         self.key = os.path.basename(filename).split('_')[-1].split('.')[0]
         self.npzfile = 'img_seg_' + os.path.basename(filename).replace('jpg','npz')
         self.img = np.flipud(imread(self.filename))
         self.px_dist = kwargs.pop('px_dist', 150)  # px_dist from mask_near_horizon
         self.px_smooth = kwargs.pop('px_smooth', 100)  # px_dist from mask_near_horizon
-        
+
         if not os.path.exists(self.npzfile):
             segdict = self.segment_image()
             self.save_segment_image(segdict)
@@ -74,9 +76,9 @@ class HorizonImage:
                       connectivity=8, px_dist=150):
         seg = TiledSkyProbSegFormer(device=device)
         _psky, _ptree = seg.p_sky_tiled(self.filename, tile=1024, overlap=256, batch=2)
-        self.sky_mask, self.psky = fill_psky_holes(_psky, thr, fill_thresh,
-                                                   connectivity, px_dist)
-        return {'skymask': self.sky_mask, 'psky': self.psky, 'ptree': _ptree}
+        self.sky_mask, _ = fill_psky_holes(_psky, thr, fill_thresh,
+                                           connectivity, px_dist)
+        return {'skymask': self.sky_mask, 'psky': _psky, 'ptree': _ptree}
 
     def save_segment_image(self, segdict):
         np.savez(self.npzfile, **segdict)
@@ -120,7 +122,7 @@ class HorizonImage:
         return r
 
     def gen_horizon_mask(self, px_dist=None):
-        if px_dist == None:
+        if px_dist is None:
             px_dist = self.px_dist
         horizon_mask, horizon_dist = mask_near_horizon(self.sky_mask, px_dist)
         return horizon_mask, horizon_dist
@@ -288,7 +290,7 @@ class PositionSolver:
         return ',\n'.join(imgs_str + [ant_str])
 
     def total_logL(self, theta, n_rays=None, eps=1e-3):
-        if n_rays == None:
+        if n_rays is None:
             n_rays = self.n_rays
         self.set_mcmc_prms(theta)
         logL_rays = 0.0
