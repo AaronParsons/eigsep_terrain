@@ -20,7 +20,7 @@ class TestUtils:
         nside = 128
         rays = healpix_rays(nside)
         rays_2d = rays.reshape(rays.shape[0], -1) 
-        r = ray_trace_basic(E, N, U, start_point, rays_2d, nside)
+        r = ray_trace_basic(E, N, U, start_point, rays_2d)
         npix = healpy.nside2npix(nside)
         px = np.arange(npix)
         th, phi = healpy.pix2ang(nside, ipix=px)
