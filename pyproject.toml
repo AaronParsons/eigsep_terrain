@@ -6,10 +6,24 @@ license = "MIT"
 authors = [{ name = "Aaron Parsons" }]
 readme = "README.md"
 dependencies = [
-  "numpy",
-  "pymc",
-  "arviz",
-  "pytensor",
+    "numpy",
+    "xmltodict",
+    "Pillow",
+    "pyuvdata",
+    "tqdm",
+    "linsolve",
+    "jax",
+    "healpy",
+]
+
+[project.optional-dependencies]
+img = [
+    "opencv-python",
+    "torch",
+    "transformers",
+    "pymc",
+    "arviz",
+    "pytensor",
 ]
 
 [project.optional-dependencies]
