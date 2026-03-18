@@ -5,17 +5,20 @@ import PIL.Image
 import os
 import pyuvdata
 import xmltodict
-import healpy
 from .utils import *
-from .ray import ray_trace_basic
+from .ray import ray_trace_basic, healpix_rays, calc_maxiter
+
+dtype_r = np.float32
 
 XML_CRD_KEYWORDS = ('eastbc', 'westbc', 'northbc', 'southbc')
+DEFAULT_BACKEND = 'numpy'
 
 class DEM(dict):
     '''Class for interacting with Digital Elevation Model data.'''
     
-    def __init__(self, cache_file=None, clear_cache=False):
+    def __init__(self, cache_file=None, clear_cache=False, backend=DEFAULT_BACKEND):
         self._cache_file = cache_file
+        self.backend = backend
         if clear_cache and os.path.exists(cache_file):
             os.remove(cache_file)
         if cache_file is not None and os.path.exists(cache_file):
@@ -134,6 +137,16 @@ class DEM(dict):
             E, N = _E, _N
         return E * self.res, N * self.res, U
 
+    def export_jax(self, dtype=dtype_r):
+        (E, N) = self.get_en()
+        U = self.data
+        return dict(
+            E=np.asarray(E, dtype=dtype),
+            N=np.asarray(N, dtype=dtype),
+            U=np.asarray(U, dtype=dtype),
+        )
+
+
     def zone_of_avoidance_height(self, e_m, n_m, r_zoa=100, decimate=1):
         '''Return the height needed to enforce all terrain is
         a distance > r_zoa away.'''
@@ -175,7 +188,7 @@ class DEM(dict):
             rmin[_b % n_az_bins] = min(rmin[_b % n_az_bins], _r)
             rmax[_b % n_az_bins] = max(rmax[_b % n_az_bins], _r)
         # Assign inf to areas that don't meet anchor length requirements
-        rmin = np.where(rmin >= r_anchor_max, np.Inf, rmin)
+        rmin = np.where(rmin >= r_anchor_max, np.inf, rmin)
         # Fold to enforce anchors being on opposite sides,
         # then minimize total anchor length
         rmin.shape = (n_anchors, -1)
@@ -283,16 +296,53 @@ class DEM(dict):
         return hangles, crds
 
     def ray_trace(self, start_point, nside, delta_r_m=1,
-                  r_max=None, max_horizon_ang_deg=45, dtype=np.float32):
+                  r_max=None, max_horizon_ang_deg=45, dtype=dtype_r,
+                  backend=None):
         '''Return the distance along a HealPix grid of specified nside from a
-        ENU starting point until a ray intersects the terrain, in steps of 
-        delta_r_m [m], out to a specified r_max_m (or map edge, if None).
-        Don't bother checking above the specified max_horizon_ang_deg [deg],
-        as these points are assumed not to intersect terrain. Returns distance
-        [m] in HealPix order, with non-intersecting points set to NaN.'''
+        ENU starting point until a ray intersects the terrain, in steps of
+        delta_r_m [m], out to r_max (or map edge if None). Rays with elevation
+        above max_horizon_ang_deg [deg] are assumed not to intersect terrain
+        and are returned as NaN. Returns distance [m] in HealPix order, with
+        non-intersecting rays set to NaN.
+
+        backend: 'numpy', 'numba', or 'jax'. Defaults to self.backend.'''
+        if backend is None:
+            backend = self.backend
         E, N = self.get_en()
-        return ray_trace_basic(E, N, self.data, start_point, nside,
-                               delta_r_m=delta_r_m,
-                               r_max=r_max,
-                               max_horizon_ang_deg=max_horizon_ang_deg,
-                               dtype=dtype)
+        rays = healpix_rays(nside, dtype=dtype)
+        r_start = np.full(rays.shape[1], delta_r_m, dtype=dtype)
+        if max_horizon_ang_deg is not None:
+            above_horizon = rays[2] > np.sin(np.deg2rad(max_horizon_ang_deg))
+            r_start[above_horizon] = np.nan
+        else:
+            above_horizon = np.zeros(rays.shape[1], dtype=bool)
+        max_iter = calc_maxiter(E, N, self.data, start_point,
+                                delta_r_m=delta_r_m, r_max=r_max)
+        if backend == 'numpy':
+            return ray_trace_basic(E, N, self.data, start_point, rays,
+                                   delta_r_m=delta_r_m, r_start=r_start,
+                                   max_iter=max_iter, dtype=dtype)
+        elif backend == 'numba':
+            from .ray_numba import ray_trace_basic_numba
+            return ray_trace_basic_numba(E, N, self.data, start_point, rays,
+                                         delta_r_m=delta_r_m, r_start=r_start,
+                                         max_iter=max_iter, dtype=dtype)
+        elif backend == 'jax':
+            from .ray_jax import ray_trace_basic_jax_jit
+            # Filter inactive rays before calling: JAX evaluates the body for
+            # all Nr rays every step (lax.while_loop cannot prune dynamically),
+            # so excluding above-horizon rays halves the per-step work.
+            active_mask = ~above_horizon
+            r_full = np.full(rays.shape[1], np.nan, dtype=dtype)
+            if active_mask.any():
+                r_sub = ray_trace_basic_jax_jit(
+                    E, N, self.data, start_point, rays[:, active_mask],
+                    delta_r_m=float(delta_r_m), max_iter=max_iter,
+                )
+                r_full[active_mask] = np.array(r_sub)
+            return r_full
+        else:
+            raise ValueError(
+                f"Unknown backend {backend!r}. "
+                "Choose 'numpy', 'numba', or 'jax'."
+            )

@@ -2,6 +2,7 @@
 import warnings
 import numpy as np
 from scipy.constants import c as C
+import cv2
 
 real_dtype = np.float32
 C = real_dtype(C)
@@ -285,16 +286,14 @@ def reflection_coefficient(eta, eta0=1):
     return (eta0 - eta) / (eta0 + eta)
 
 def are_points_in_polygon(vertices, points):
-    """
-    Determine if multiple points are inside a polygon using the ray-casting algorithm.
+    """Determine if multiple points are inside a polygon using ray-casting algorithm.
 
     Parameters:
     vertices (numpy.ndarray): A 2D array of shape (n, 2) representing the polygon vertices.
     points (numpy.ndarray): A 2D array of shape (m, 2) representing the points to be tested.
 
     Returns:
-    numpy.ndarray: A boolean array of shape (m,) where each element indicates if the point is inside the polygon.
-    """
+    numpy.ndarray: A boolean array of shape (m,) where each element indicates if the point is inside the polygon."""
     x_vertices, y_vertices = vertices
     x_points, y_points = points
 
@@ -313,3 +312,29 @@ def are_points_in_polygon(vertices, points):
 
         inside ^= intersect  # Toggle inside state
     return inside
+
+
+def mask_near_horizon(sky_mask, px_dist):
+    """Generate mask of pixels within px_dist of edge in sky_mask.
+    """
+    m = (sky_mask > 0).astype(np.uint8) * 255 
+    kernel = np.ones((3,3), np.uint8)
+    inner_eroded = cv2.erode(m, kernel, iterations=1)
+    edge = cv2.bitwise_xor(m, inner_eroded)
+    inv_edge = cv2.bitwise_not(edge)
+    dist = cv2.distanceTransform(inv_edge, cv2.DIST_L2, 5)
+    near_horizon = (dist <= px_dist)
+    return near_horizon, dist
+
+def fill_psky_holes(psky, thr, fill_thresh, connectivity, px_dist):
+    """Fill holes in probabilistically segmented sky.
+    """
+    sky = (psky >= thr)
+    nlabels, labels, stats, _ = cv2.connectedComponentsWithStats((~sky).astype(np.uint8), connectivity=connectivity)
+    for label in range(1, nlabels):
+        area = stats[label, cv2.CC_STAT_AREA]
+        if area < fill_thresh:
+            sky[labels == label] = True
+    horz, _ = mask_near_horizon(sky, px_dist)
+    psky_filled = np.where(horz, psky, sky)
+    return sky, psky_filled
