@@ -16,7 +16,7 @@ dependencies = [
 numba = ["numba"]
 
 [tool.setuptools]
-script-files = ["scripts/eigsep_terrain_pymc.py", "scripts/diagnostic_plots.py"]
+script-files = ["scripts/eigsep_terrain_pymc.py", "scripts/diagnostic_plot.py"]
 include-package-data = true
 
 [tool.black]
