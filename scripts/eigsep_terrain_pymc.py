@@ -1,4 +1,13 @@
 #!/usr/bin/env python
+"""
+MCMC runner — sampling only, no plotting.
+
+Outputs for each run:
+  trace_seed{NNN}.nc        ArviZ InferenceData (posterior + sample_stats)
+  trace_seed{NNN}_meta.json Sampling metadata (args, seed, acceptance, param names)
+
+Use plot_trace.py (or any script) to load both files and produce figures.
+"""
 import argparse
 import glob
 import json
@@ -201,14 +210,27 @@ def main(argv=None) -> int:
     accepted = float(trace.sample_stats.accepted.mean())
     param_names = [p.name for p in mcmc_prms]
 
-    # Per-param posterior mean and std for quick inspection
+    # Recover the final scaling from the step object (DEMetropolisZ tunes it).
+    try:
+        tuned_scaling = float(step.scaling)
+    except Exception:
+        tuned_scaling = args.scaling
+
+    # Per-param posterior mean/std, prior mu/sigma, and effective proposal step.
+    # prior_mu is the value of prms_h at the index matching this param, which
+    # is exactly the Normal mu passed to pm.Normal in get_mcmc_prms().
+    # effective_step = tuned_scaling * S[i]  (the actual proposal std used by
+    # DEMetropolisZ for this parameter after tuning).
     param_summary = {}
-    for name in param_names:
+    for i, name in enumerate(param_names):
         arr = trace.posterior[name].values.flatten()
+        prior_sigma = float(ps.sigmas[i])
         param_summary[name] = {
             "mean": float(arr.mean()),
             "std": float(arr.std()),
-            "prior_sigma": float(ps.sigmas[param_names.index(name)]),
+            "prior_mu": float(prms_h[i]),
+            "prior_sigma": prior_sigma,
+            "effective_step": float(tuned_scaling * prior_sigma),
         }
 
     # --- Write metadata sidecar ---
@@ -227,6 +249,7 @@ def main(argv=None) -> int:
         },
         "step": {
             "scaling": args.scaling,
+            "tuned_scaling": tuned_scaling,
             "tune_interval": args.tune_interval,
             "jitter_scaling": args.jitter_scaling,
         },
