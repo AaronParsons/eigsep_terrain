@@ -1,21 +1,17 @@
 #!/usr/bin/env python
-"""
-MCMC runner
-"""
 import argparse
 import glob
+import json
 import os
-import sys
 
 import numpy as np
 import pymc as pm
 import arviz as az
 import pytensor.tensor as pt
 from pytensor.compile.ops import as_op
-import matplotlib.pyplot as plt
 
 from eigsep_terrain.marjum_dem import MarjumDEM as DEM
-from eigsep_terrain.img import HorizonImage, PositionSolver, PRM_ORDER, dtype_r 
+from eigsep_terrain.img import HorizonImage, PositionSolver, PRM_ORDER, dtype_r
 
 BOX_SIZE = 0.3  # m
 
@@ -53,11 +49,9 @@ def _apply_prms_to_dem_and_meta(
             f"({nimgs} images * {prm_len} params + 3 platform)."
         )
 
-    # Platform at end
     platform = prms[-3:].astype(dtype_r)
     dem["platform"] = platform
 
-    # Per-image chunks
     off = 0
     for key in img_keys_in_fit_order:
         chunk = prms[off : off + prm_len]
@@ -102,10 +96,13 @@ def main(argv=None) -> int:
     # Seed / outfile
     seed = args.seed if args.seed is not None else int(np.random.randint(1000))
     np.random.seed(seed)
-    outfile = f"trace_seed{seed:03d}.nc"
+    stem = f"trace_seed{seed:03d}"
+    outfile = f"{stem}.nc"
+    metafile = f"{stem}_meta.json"
     print(f"RANDOM SEED: {seed}")
-    print(f"OUTFILE: {outfile}")
-    assert not os.path.exists(outfile) # make sure file won't be overwritten
+    print(f"OUTFILE:     {outfile}")
+    print(f"METAFILE:    {metafile}")
+    assert not os.path.exists(outfile), f"{outfile} already exists; choose a different seed or move the file."
 
     # Load DEM
     dem = DEM(cache_file=args.cache_file)
@@ -116,7 +113,6 @@ def main(argv=None) -> int:
         raise FileNotFoundError(f"No images matched --img-glob: {args.img_glob}")
 
     meta = {k: dict(v) for k, v in DEFAULT_META.items()}
-    # Build HorizonImage list once (for MCMC)
     imgs = [HorizonImage(f, meta, px_smooth=args.px_smooth, px_dist=args.px_dist) for f in files]
     imgs = [img for img in imgs if img.key in meta]
     if not imgs:
@@ -134,7 +130,6 @@ def main(argv=None) -> int:
         prms=prms_u,
         prm_len=len(PRM_ORDER),
     )
-    platform = dem["platform"]
 
     ps = PositionSolver(
         dem["platform"],
@@ -153,9 +148,10 @@ def main(argv=None) -> int:
     @as_op(itypes=[pt.fvector], otypes=[pt.fscalar])
     def total_logp_op(theta):
         try:
-            return np.asarray(ps.total_logL(
-                              np.asarray(theta, dtype=dtype_r), eps=eps),
-                              dtype=dtype_r)
+            return np.asarray(
+                ps.total_logL(np.asarray(theta, dtype=dtype_r), eps=eps),
+                dtype=dtype_r,
+            )
         except (ValueError, FloatingPointError):
             return np.asarray(-np.inf, dtype=dtype_r)
 
@@ -166,8 +162,11 @@ def main(argv=None) -> int:
 
         initvals = []
         for c in range(args.chains):
-            jitter = rng.normal(0.0, np.asarray(ps.sigmas) * args.jitter_scaling,
-                                size=prms_h.size)
+            jitter = rng.normal(
+                0.0,
+                np.asarray(ps.sigmas) * args.jitter_scaling,
+                size=prms_h.size,
+            )
             jittered = prms_h + jitter
             ps.set_mcmc_prms(jittered)
             start_c = ps.eval_cur_prms()
@@ -195,10 +194,64 @@ def main(argv=None) -> int:
             progressbar=True,
         )
 
-
+    # --- Save trace ---
     az.to_netcdf(trace, outfile)
 
-    print(f"Accepted step fraction = {float(trace.sample_stats.accepted.mean()): 4.3f}")
+    # --- Compute summary stats ---
+    accepted = float(trace.sample_stats.accepted.mean())
+    param_names = [p.name for p in mcmc_prms]
+
+    # Per-param posterior mean and std for quick inspection
+    param_summary = {}
+    for name in param_names:
+        arr = trace.posterior[name].values.flatten()
+        param_summary[name] = {
+            "mean": float(arr.mean()),
+            "std": float(arr.std()),
+            "prior_sigma": float(ps.sigmas[param_names.index(name)]),
+        }
+
+    # --- Write metadata sidecar ---
+    run_meta = {
+        "seed": seed,
+        "outfile": outfile,
+        "img_keys": img_keys,
+        "param_names": param_names,
+        "prm_order": list(PRM_ORDER),
+        "accepted_mean": accepted,
+        "sampling": {
+            "draws": args.draws,
+            "tune": args.tune,
+            "chains": args.chains,
+            "cores": args.cores,
+        },
+        "step": {
+            "scaling": args.scaling,
+            "tune_interval": args.tune_interval,
+            "jitter_scaling": args.jitter_scaling,
+        },
+        "likelihood": {
+            "eps": args.eps,
+            "n_rays": args.n_rays,
+        },
+        "image": {
+            "px_dist": args.px_dist,
+            "px_smooth": args.px_smooth,
+            "img_glob": args.img_glob,
+        },
+        "param_summary": param_summary,
+    }
+
+    with open(metafile, "w") as f:
+        json.dump(run_meta, f, indent=2)
+
+    # --- Print summary ---
+    print(f"\n{'='*50}")
+    print(f"Accepted step fraction = {accepted:.3f}")
+    print(f"Trace written to:        {outfile}")
+    print(f"Metadata written to:     {metafile}")
+    print(f"{'='*50}")
+
     return 0
 
 
