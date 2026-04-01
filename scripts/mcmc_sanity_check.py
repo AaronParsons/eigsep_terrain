@@ -404,6 +404,16 @@ def build_argparser():
     ap.add_argument("--scaling",   type=float, default=1e-2,
                     help="DEMetropolisZ scaling to probe (same as MCMC --scaling)")
 
+    # Prior sigmas — use the same values as the MCMC run
+    ap.add_argument("--pos-err",      type=float, default=30.0,
+                    help="Position prior sigma in metres (default: 30.0)")
+    ap.add_argument("--ang-err-deg",  type=float, default=5.0,
+                    help="Angle prior sigma in degrees (default: 5.0)")
+    ap.add_argument("--f-err",        type=float, default=0.1,
+                    help="Focal-length prior sigma as fraction of f (default: 0.1)")
+    ap.add_argument("--log-h-sigma",  type=float, default=1.0,
+                    help="log-height prior sigma (default: 1.0)")
+
     # Probe settings
     ap.add_argument("--prior-samples", type=int, default=80,
                     help="Number of prior draws for prior predictive check (default: 80)")
@@ -430,6 +440,10 @@ def main(argv=None):
     print(f"  n_rays      = {args.n_rays}")
     print(f"  eps         = {args.eps}")
     print(f"  img_glob    = {args.img_glob}")
+    print(f"  pos_err     = {args.pos_err} m")
+    print(f"  ang_err     = {args.ang_err_deg} deg")
+    print(f"  f_err       = {args.f_err}")
+    print(f"  log_h_sigma = {args.log_h_sigma}")
     print(f"  output      = {outfile}")
 
     # ── setup (mirrors eigsep_terrain_pymc.py) ────────────────────────────────
@@ -458,7 +472,12 @@ def main(argv=None):
     )
     prms_h = ps.prms_u_to_h(prms_u)
     ps.set_mcmc_prms(prms_h)
-    ps.set_mcmc_sigmas()
+    ps.set_mcmc_sigmas(
+        pos_err=args.pos_err,
+        ang_err=np.deg2rad(args.ang_err_deg),
+        f_err=args.f_err,
+        log_h_sigma=args.log_h_sigma,
+    )
 
     # ── run checks ────────────────────────────────────────────────────────────
     results = {}

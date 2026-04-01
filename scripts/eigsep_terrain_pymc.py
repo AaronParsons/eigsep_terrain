@@ -85,6 +85,16 @@ def build_argparser() -> argparse.ArgumentParser:
     # logL op params
     ap.add_argument("--eps", type=float, default=1e-2)
 
+    # Prior sigmas (passed directly to PositionSolver.set_mcmc_sigmas)
+    ap.add_argument("--pos-err",      type=float, default=30.0,
+                    help="Position prior sigma in metres (default: 30.0)")
+    ap.add_argument("--ang-err-deg",  type=float, default=5.0,
+                    help="Angle prior sigma in degrees (default: 5.0)")
+    ap.add_argument("--f-err",        type=float, default=0.1,
+                    help="Focal-length prior sigma as fraction of f (default: 0.1)")
+    ap.add_argument("--log-h-sigma",  type=float, default=1.0,
+                    help="log-height prior sigma (default: 1.0)")
+
     # Step method params
     ap.add_argument("--scaling", type=float, default=1e-2)
     ap.add_argument("--tune-interval", type=int, default=50)
@@ -150,7 +160,12 @@ def main(argv=None) -> int:
     )
     prms_h = ps.prms_u_to_h(prms_u)
     ps.set_mcmc_prms(prms_h)
-    ps.set_mcmc_sigmas()
+    ps.set_mcmc_sigmas(
+        pos_err=args.pos_err,
+        ang_err=np.deg2rad(args.ang_err_deg),
+        f_err=args.f_err,
+        log_h_sigma=args.log_h_sigma,
+    )
 
     eps = dtype_r(args.eps)
 
@@ -252,6 +267,12 @@ def main(argv=None) -> int:
             "tuned_scaling": tuned_scaling,
             "tune_interval": args.tune_interval,
             "jitter_scaling": args.jitter_scaling,
+        },
+        "priors": {
+            "pos_err": args.pos_err,
+            "ang_err_deg": args.ang_err_deg,
+            "f_err": args.f_err,
+            "log_h_sigma": args.log_h_sigma,
         },
         "likelihood": {
             "eps": args.eps,
