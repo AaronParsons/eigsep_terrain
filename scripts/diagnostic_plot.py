@@ -58,7 +58,7 @@ PARAM_LABELS = {
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _load(nc_path):
-    """Load trace and sidecar metadata. Returns (trace, meta, stem)."""
+    """Load trace and sidecar metadata. Returns (trace, meta, stem, outdir)."""
     stem = re.sub(r"\.nc$", "", nc_path)
     metafile = f"{stem}_meta.json"
     trace = az.from_netcdf(nc_path)
@@ -68,15 +68,23 @@ def _load(nc_path):
     else:
         print(f"WARNING: {metafile} not found — prior overlay and shrinkage unavailable.")
         meta = {}
-    return trace, meta, stem
+
+    seed = meta.get("seed", re.search(r"seed(\d+)", stem).group(1)
+                    if re.search(r"seed(\d+)", stem) else "unknown")
+    outdir = os.path.join(os.path.dirname(os.path.abspath(nc_path)),
+                          f"{seed}_dgnstc_plots")
+    os.makedirs(outdir, exist_ok=True)
+    print(f"  output folder: {outdir}")
+
+    return trace, meta, stem, outdir
 
 
-def _suptitle(fig, meta, extra=""):
-    """Attach a compact run-summary as the figure suptitle."""
+def _suptitle(fig, meta, plot_name="", extra=""):
+    """Attach plot name + compact run-summary as the figure suptitle."""
     s = meta.get("sampling", {})
     st = meta.get("step", {})
     lk = meta.get("likelihood", {})
-    parts = [
+    run_parts = [
         f"seed={meta.get('seed', '?')}",
         f"draws={s.get('draws', '?')}",
         f"tune={s.get('tune', '?')}",
@@ -87,8 +95,13 @@ def _suptitle(fig, meta, extra=""):
         f"accept={meta.get('accepted_mean', float('nan')):.3f}",
     ]
     if extra:
-        parts.append(extra)
-    fig.suptitle("  |  ".join(parts), fontsize=7, y=1.01)
+        run_parts.append(extra)
+    run_str = "  |  ".join(run_parts)
+    if plot_name:
+        fig.suptitle(plot_name + "\n" + run_str, fontsize=8, y=1.02,
+                     fontweight="bold")
+    else:
+        fig.suptitle(run_str, fontsize=7, y=1.01)
 
 
 def _param_label(name):
@@ -101,8 +114,8 @@ def _param_label(name):
     return PARAM_LABELS.get(name, name)
 
 
-def _save(fig, stem, tag):
-    path = f"{stem}_{tag}.png"
+def _save(fig, outdir, tag):
+    path = os.path.join(outdir, f"{tag}.png")
     fig.savefig(path, bbox_inches="tight")
     print(f"  saved: {path}")
     plt.close(fig)
@@ -115,7 +128,7 @@ def _posterior_array(trace, name):
 
 # ── individual plot functions ─────────────────────────────────────────────────
 
-def plot_trace(trace, meta, stem):
+def plot_trace(trace, meta, stem, outdir):
     """Chain timeseries + marginal KDE via ArviZ."""
     param_names = meta.get("param_names") or list(trace.posterior.data_vars)
     axes = az.plot_trace(trace, var_names=param_names, compact=False,
@@ -125,31 +138,31 @@ def plot_trace(trace, meta, stem):
     for row, name in zip(axes, param_names):
         for ax in row:
             ax.set_title(_param_label(name), fontsize=8)
-    _suptitle(fig, meta)
-    _save(fig, stem, "trace")
+    _suptitle(fig, meta, plot_name="Trace plot")
+    _save(fig, outdir, "trace")
 
 
-def plot_rank(trace, meta, stem):
+def plot_rank(trace, meta, stem, outdir):
     """Rank plots — better than trace for diagnosing multi-chain mixing."""
     param_names = meta.get("param_names") or list(trace.posterior.data_vars)
     axes = az.plot_rank(trace, var_names=param_names,
                         figsize=(10, max(3, len(param_names) * 0.9)))
     fig = axes.ravel()[0].get_figure()
-    _suptitle(fig, meta)
-    _save(fig, stem, "rank")
+    _suptitle(fig, meta, plot_name="Rank plot")
+    _save(fig, outdir, "rank")
 
 
-def plot_autocorr(trace, meta, stem):
+def plot_autocorr(trace, meta, stem, outdir):
     """Autocorrelation per param — slow decay = poor ESS."""
     param_names = meta.get("param_names") or list(trace.posterior.data_vars)
     axes = az.plot_autocorr(trace, var_names=param_names, max_lag=200,
                             figsize=(12, max(3, len(param_names) * 1.0)))
     fig = axes.ravel()[0].get_figure()
-    _suptitle(fig, meta)
-    _save(fig, stem, "autocorr")
+    _suptitle(fig, meta, plot_name="Autocorrelation")
+    _save(fig, outdir, "autocorr")
 
 
-def plot_posterior(trace, meta, stem):
+def plot_posterior(trace, meta, stem, outdir):
     """
     Marginal posterior KDE per param with prior Normal overlay.
     Prior sigma comes from meta['param_summary'][name]['prior_sigma'].
@@ -189,11 +202,11 @@ def plot_posterior(trace, meta, stem):
     for ax in axes[len(param_names):]:
         ax.set_visible(False)
 
-    _suptitle(fig, meta)
-    _save(fig, stem, "posterior")
+    _suptitle(fig, meta, plot_name="Posterior marginals")
+    _save(fig, outdir, "posterior")
 
 
-def plot_shrinkage(trace, meta, stem):
+def plot_shrinkage(trace, meta, stem, outdir):
     """
     Shrinkage = 1 - posterior_std / prior_sigma per param.
     Near 1 → data-dominated. Near 0 → prior not updated (weak likelihood or prior too tight).
@@ -225,11 +238,11 @@ def plot_shrinkage(trace, meta, stem):
     ax.set_ylabel("shrinkage  (1 − post_std / prior_σ)")
     ax.set_ylim(-0.2, 1.1)
     ax.legend(fontsize=8)
-    _suptitle(fig, meta)
-    _save(fig, stem, "shrinkage")
+    _suptitle(fig, meta, plot_name="Shrinkage")
+    _save(fig, outdir, "shrinkage")
 
 
-def plot_pair(trace, meta, stem, group="position"):
+def plot_pair(trace, meta, stem, outdir, group="position"):
     """
     Bivariate scatter/KDE for a param subset.
     group: 'position'  → E, N, log_h params for each camera + antenna
@@ -265,11 +278,11 @@ def plot_pair(trace, meta, stem, group="position"):
             ax.set_xlabel(_param_label(xl), fontsize=8)
         if yl:
             ax.set_ylabel(_param_label(yl), fontsize=8)
-    _suptitle(fig, meta, extra=f"pair={group}")
-    _save(fig, stem, f"pair_{group}")
+    _suptitle(fig, meta, plot_name=f"Pair plot — {group}", extra=f"pair={group}")
+    _save(fig, outdir, f"pair_{group}")
 
 
-def plot_acceptance(trace, meta, stem, window=100):
+def plot_acceptance(trace, meta, stem, outdir, window=100):
     """Rolling acceptance rate over the chain draw index."""
     # sample_stats.accepted is bool (chain, draw)
     accepted = trace.sample_stats.accepted.values  # (chains, draws)
@@ -290,43 +303,45 @@ def plot_acceptance(trace, meta, stem, window=100):
     ax.set_ylabel("acceptance rate")
     ax.set_ylim(0, 1)
     ax.legend()
-    _suptitle(fig, meta)
-    _save(fig, stem, "acceptance")
+    _suptitle(fig, meta, plot_name="Rolling acceptance rate")
+    _save(fig, outdir, "acceptance")
 
 
-def plot_logp(trace, meta, stem):
+def plot_sampler_stats(trace, meta, stem, outdir):
     """
-    Log-likelihood (lik potential) timeseries per chain.
-    Uses sample_stats; falls back to lp if lik_potential not present.
+    DEMetropolisZ sampler diagnostics: scaling and lambda timeseries.
+
+    scaling: the adaptive step-size multiplier — should stabilise during
+             tuning and stay flat during sampling.
+    lambda:  the DE jump size (distance between two history points) —
+             gives a sense of how far proposals are jumping in parameter space.
+    Both are from sample_stats, which for DEMetropolisZ contains:
+    ['accept', 'accepted', 'lambda', 'scaling'].
     """
     ss = trace.sample_stats
-    # ArviZ stores the Potential contribution differently depending on PyMC version.
-    # Try common attribute names in order.
-    for attr in ("lik", "lp", "log_likelihood"):
-        if hasattr(ss, attr):
-            logp_da = getattr(ss, attr)
-            label = attr
-            break
-    else:
-        print("  logp: no recognised logp field in sample_stats, skipping.")
-        return
+    fig, axes = plt.subplots(2, 1, figsize=(10, 5), sharex=True)
 
-    logp = logp_da.values  # (chains, draws) or (chains, draws, ...)
-    if logp.ndim > 2:
-        logp = logp.squeeze()
+    for attr, ax, ylabel in [
+        ("scaling", axes[0], "scaling"),
+        ("lambda",  axes[1], "lambda (DE jump size)"),
+    ]:
+        if not hasattr(ss, attr):
+            ax.set_visible(False)
+            continue
+        vals = getattr(ss, attr).values  # (chains, draws)
+        if vals.ndim == 1:
+            vals = vals[None, :]
+        for c in range(vals.shape[0]):
+            ax.plot(vals[c], lw=0.6, alpha=0.8, label=f"chain {c}")
+        ax.set_ylabel(ylabel)
+        ax.legend(fontsize=7)
 
-    n_chains = logp.shape[0]
-    fig, ax = plt.subplots(figsize=(10, 3))
-    for c in range(n_chains):
-        ax.plot(logp[c], lw=0.6, alpha=0.8, label=f"chain {c}")
-    ax.set_xlabel("draw")
-    ax.set_ylabel(f"logL  ({label})")
-    ax.legend()
-    _suptitle(fig, meta)
-    _save(fig, stem, "logp")
+    axes[-1].set_xlabel("draw")
+    _suptitle(fig, meta, plot_name="Sampler stats (scaling & lambda)")
+    _save(fig, outdir, "sampler_stats")
 
 
-def plot_prior_predictive(trace, meta, stem, n_samples=2000):
+def plot_prior_predictive(trace, meta, stem, outdir, n_samples=2000):
     """
     Prior predictive distribution vs posterior for every param.
 
@@ -385,11 +400,11 @@ def plot_prior_predictive(trace, meta, stem, n_samples=2000):
     for ax in axes[len(param_names):]:
         ax.set_visible(False)
 
-    _suptitle(fig, meta)
-    _save(fig, stem, "prior_predictive")
+    _suptitle(fig, meta, plot_name="Prior predictive vs posterior")
+    _save(fig, outdir, "prior_predictive")
 
 
-def plot_step_size(trace, meta, stem):
+def plot_step_size(trace, meta, stem, outdir):
     """
     Proposal step size diagnostics — three panels per param group:
 
@@ -473,11 +488,11 @@ def plot_step_size(trace, meta, stem):
     ax2.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
 
     fig.align_ylabels([ax1, ax2])
-    _suptitle(fig, meta)
-    _save(fig, stem, "step_size")
+    _suptitle(fig, meta, plot_name="Step size vs posterior & prior widths")
+    _save(fig, outdir, "step_size")
 
 
-def plot_prior_sensitivity(trace, meta, stem):
+def plot_prior_sensitivity(trace, meta, stem, outdir):
     """
     Prior sensitivity summary — two panels:
 
@@ -554,8 +569,8 @@ def plot_prior_sensitivity(trace, meta, stem):
     ax2.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
 
     fig.align_ylabels([ax1, ax2])
-    _suptitle(fig, meta)
-    _save(fig, stem, "prior_sensitivity")
+    _suptitle(fig, meta, plot_name="Prior sensitivity (z-score & contraction)")
+    _save(fig, outdir, "prior_sensitivity")
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -577,7 +592,7 @@ def build_argparser():
     ap.add_argument("--pair-angles",action="store_true", help="Bivariate scatter (angles group)")
     ap.add_argument("--pair-all",   action="store_true", help="Bivariate scatter (all params)")
     ap.add_argument("--acceptance", action="store_true", help="Rolling acceptance rate")
-    ap.add_argument("--logp",       action="store_true", help="Log-likelihood timeseries")
+    ap.add_argument("--sampler-stats", action="store_true", help="DEMetropolisZ scaling and lambda timeseries")
     ap.add_argument("--prior-predictive",  action="store_true",
                     help="Prior predictive vs posterior histogram per param")
     ap.add_argument("--step-size",         action="store_true",
@@ -597,7 +612,7 @@ def build_argparser():
 
 def main(argv=None):
     args = build_argparser().parse_args(argv)
-    trace, meta, stem = _load(args.nc_file)
+    trace, meta, stem, outdir = _load(args.nc_file)
 
     do_all = args.all
     show   = args.show
@@ -613,67 +628,67 @@ def main(argv=None):
 
     if do_all or args.trace:
         print("Plotting: trace")
-        plot_trace(trace, meta, stem)
+        plot_trace(trace, meta, stem, outdir)
         plots_run += 1
 
     if do_all or args.rank:
         print("Plotting: rank")
-        plot_rank(trace, meta, stem)
+        plot_rank(trace, meta, stem, outdir)
         plots_run += 1
 
     if do_all or args.autocorr:
         print("Plotting: autocorr")
-        plot_autocorr(trace, meta, stem)
+        plot_autocorr(trace, meta, stem, outdir)
         plots_run += 1
 
     if do_all or args.posterior:
         print("Plotting: posterior")
-        plot_posterior(trace, meta, stem)
+        plot_posterior(trace, meta, stem, outdir)
         plots_run += 1
 
     if do_all or args.shrinkage:
         print("Plotting: shrinkage")
-        plot_shrinkage(trace, meta, stem)
+        plot_shrinkage(trace, meta, stem, outdir)
         plots_run += 1
 
     if do_all or args.pair:
         print("Plotting: pair (position)")
-        plot_pair(trace, meta, stem, group="position")
+        plot_pair(trace, meta, stem, outdir, group="position")
         plots_run += 1
 
     if do_all or args.pair_angles:
         print("Plotting: pair (angles)")
-        plot_pair(trace, meta, stem, group="angles")
+        plot_pair(trace, meta, stem, outdir, group="angles")
         plots_run += 1
 
     if args.pair_all:
         print("Plotting: pair (all) — may be slow")
-        plot_pair(trace, meta, stem, group="all")
+        plot_pair(trace, meta, stem, outdir, group="all")
         plots_run += 1
 
     if do_all or args.acceptance:
         print("Plotting: acceptance")
-        plot_acceptance(trace, meta, stem, window=args.window)
+        plot_acceptance(trace, meta, stem, outdir, window=args.window)
         plots_run += 1
 
-    if do_all or args.logp:
-        print("Plotting: logp")
-        plot_logp(trace, meta, stem)
+    if do_all or args.sampler_stats:
+        print("Plotting: sampler_stats")
+        plot_sampler_stats(trace, meta, stem, outdir)
         plots_run += 1
 
     if do_all or args.prior_predictive:
         print("Plotting: prior_predictive")
-        plot_prior_predictive(trace, meta, stem)
+        plot_prior_predictive(trace, meta, stem, outdir)
         plots_run += 1
 
     if do_all or args.step_size:
         print("Plotting: step_size")
-        plot_step_size(trace, meta, stem)
+        plot_step_size(trace, meta, stem, outdir)
         plots_run += 1
 
     if do_all or args.prior_sensitivity:
         print("Plotting: prior_sensitivity")
-        plot_prior_sensitivity(trace, meta, stem)
+        plot_prior_sensitivity(trace, meta, stem, outdir)
         plots_run += 1
 
     if plots_run == 0:
