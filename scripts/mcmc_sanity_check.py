@@ -126,35 +126,73 @@ def check_logL_at_init(ps, prms_h, eps, n_rays):
 
 
 def check_dem_bounds(ps, dem):
-    """Check 2: are all cameras and the antenna inside the DEM extent?"""
+    """Check 2: are all cameras and the antenna inside the DEM extent?
+
+    Checks three things per point:
+      - E within DEM grid (horizontal)
+      - N within DEM grid (horizontal)
+      - u (altitude) is above the terrain surface and within a plausible
+        height above ground (0–200 m). A camera with u set below the DEM
+        surface or implausibly high will cause interp_alt to return wrong
+        values silently.
+
+    Trustworthiness: high. This is pure geometry with no probabilistic
+    reasoning. The altitude check uses dem.interp_alt which is the same
+    function used during ray tracing, so any discrepancy found here will
+    also affect logL.
+    """
     print("\n[2/5] DEM bounds ...")
     E, N = dem.get_en()
     e_range = (float(E[0]), float(E[-1]))
     n_range = (float(N[0]), float(N[-1]))
+    MAX_HEIGHT_ABOVE_GROUND = 10.0  # m — above this is implausible for a camera
+
+    def _check_point(e, n, u, label):
+        in_e = e_range[0] <= e <= e_range[1]
+        in_n = n_range[0] <= n <= n_range[1]
+        horiz_ok = in_e and in_n
+        height_ok = False
+        terrain_u = None
+        height_above = None
+        if horiz_ok:
+            try:
+                terrain_u = float(dem.interp_alt(e, n))
+                height_above = u - terrain_u
+                height_ok = 0 < height_above < MAX_HEIGHT_ABOVE_GROUND
+            except Exception:
+                height_ok = False
+        ok = horiz_ok and height_ok
+        marker = "  ok" if ok else "FAIL" if not horiz_ok else "WARN"
+        h_str = f"  h={height_above:.1f}m above terrain" if height_above is not None else "  (terrain lookup failed)"
+        print(f"    [{marker}] {label}: E={e:.1f}  N={n:.1f}  u={u:.1f}{h_str}")
+        if not in_e or not in_n:
+            print(f"           Outside DEM footprint "
+                  f"E={e_range[0]:.0f}..{e_range[1]:.0f}  N={n_range[0]:.0f}..{n_range[1]:.0f}")
+        if horiz_ok and not height_ok:
+            if height_above is not None and height_above <= 0:
+                print(f"           u={u:.1f} is at or below terrain surface ({terrain_u:.1f}m) — check init params.")
+            elif height_above is not None:
+                print(f"           h={height_above:.1f}m above ground exceeds {MAX_HEIGHT_ABOVE_GROUND}m — check init params.")
+        return {"e": e, "n": n, "u": u, "in_bounds": ok,
+                "horiz_ok": horiz_ok, "height_ok": height_ok,
+                "terrain_u": terrain_u, "height_above": height_above}
 
     results = {}
     all_ok = True
     for img in ps.fit_imgs:
-        e, n = img.prms["e"], img.prms["n"]
-        in_e = e_range[0] <= e <= e_range[1]
-        in_n = n_range[0] <= n <= n_range[1]
-        ok = in_e and in_n
-        all_ok = all_ok and ok
-        results[img.key] = {"e": e, "n": n, "in_bounds": ok}
-        marker = "  ok" if ok else "FAIL"
-        print(f"    [{marker}] camera {img.key}: E={e:.1f}  N={n:.1f}"
-              f"  (DEM E={e_range[0]:.0f}..{e_range[1]:.0f}"
-              f"  N={n_range[0]:.0f}..{n_range[1]:.0f})")
+        r = _check_point(img.prms["e"], img.prms["n"], img.prms["u"],
+                         f"camera {img.key}")
+        results[img.key] = r
+        all_ok = all_ok and r["in_bounds"]
 
-    ae, an = ps.ant_pos[0], ps.ant_pos[1]
-    ant_ok = e_range[0] <= ae <= e_range[1] and n_range[0] <= an <= n_range[1]
-    all_ok = all_ok and ant_ok
-    results["antenna"] = {"e": ae, "n": an, "in_bounds": ant_ok}
-    marker = "  ok" if ant_ok else "FAIL"
-    print(f"    [{marker}] antenna:        E={ae:.1f}  N={an:.1f}")
+    ae, an, au = ps.ant_pos[0], ps.ant_pos[1], ps.ant_pos[2]
+    r = _check_point(ae, an, au, "antenna     ")
+    results["antenna"] = r
+    all_ok = all_ok and r["in_bounds"]
 
     status = PASS if all_ok else FAIL
-    return {"status": status, "points": results, "dem_e_range": e_range, "dem_n_range": n_range}
+    return {"status": status, "points": results,
+            "dem_e_range": e_range, "dem_n_range": n_range}
 
 
 def check_prior_predictive(ps, prms_h, eps, n_rays, n_samples=80):
@@ -260,6 +298,8 @@ def check_scaling_probe(ps, prms_h, eps, n_rays, scaling, n_proposals=200):
     for _ in range(n_proposals):
         proposal = current + rng.normal(0.0, sigmas * scaling)
         prop_logL = _safe_logL(ps, proposal, eps, n_rays=n_rays)
+        if not np.isfinite(prop_logL):
+            continue  # reject -inf or +inf proposals outright
         log_alpha = prop_logL - current_logL
         if np.log(rng.uniform()) < log_alpha:
             current = proposal
@@ -294,9 +334,16 @@ def check_scaling_probe(ps, prms_h, eps, n_rays, scaling, n_proposals=200):
 def check_pixel_stability(ps, prms_h, eps, n_rays, n_repeats=10):
     """
     Check 5: evaluate logL multiple times at the same parameters with
-    different pixel draws. The coefficient of variation (std / |mean|)
-    measures how noisy the likelihood is due to pixel subsampling.
-    High noise invalidates the MH acceptance criterion.
+    different pixel draws, and measure the std of logL across draws.
+
+    The relevant quantity for MH correctness is std in logL units: the
+    acceptance ratio exp(logL_prop - logL_cur) fluctuates by exp(std) due
+    to pixel noise alone. std > 10 means the acceptance ratio is off by up
+    to exp(10) ~ 22000x from pixel noise, which severely corrupts sampling.
+
+    Implementation note: pixel refresh is done by setting img._px_choice = None
+    before each call, which forces choose_pixels() to redraw. This relies on a
+    private attribute and would break if the internal caching logic changes.
     """
     print(f"\n[5/5] Pixel stability ({n_repeats} draws at same params) ...")
     logLs = []

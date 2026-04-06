@@ -1,4 +1,4 @@
-## description of plots
+## description of diagnostic plots
 ### Trace plot
 
 two panels per parameter: the left panel is the chain timeseries (the raw sequence of sampled values draw by draw) and the right is the marginal KDE. The timeseries should look like a fuzzy caterpillar with no trend — if it drifts, sticks in one place for long stretches, or shows sudden jumps to a different value range, the chain hasn't mixed. The KDE should be smooth and unimodal if the posterior is well-behaved.
@@ -26,6 +26,7 @@ bivariate scatter of posterior samples for pairs of parameters. The shape of the
 ### Rolling acceptance rate
 
 the fraction of proposals accepted in a sliding window across draws. Should be roughly flat after tuning and sit in the 0.2–0.4 range. A declining trend means the chain is getting stuck as it moves into lower-density regions. A very spiky or erratic acceptance rate suggests the likelihood surface is rough.
+
 ### Sampler stats (scaling & lambda)
 
 both are internal DEMetropolisZ quantities. scaling is the adaptive step-size multiplier — it should decrease and stabilise during tuning, then stay flat. If it's still changing during the sampling draws you need more tuning. lambda is the magnitude of the differential evolution jump vector (the distance between two randomly chosen past chain states used to construct the proposal direction) — it reflects how spread out the chain history is. If lambda collapses to near zero, the chain has degenerated into a tight cluster and proposals become tiny.
