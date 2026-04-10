@@ -15,3 +15,6 @@ trace*.png
 *_dgnstc_plots/
 sanity_*.json
 test_prior*/
+__pycache__/
+*.py[cod]
+*.pyo
