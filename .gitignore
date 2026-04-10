@@ -14,3 +14,4 @@ trace_seed*_meta.json
 trace*.png
 *_dgnstc_plots/
 sanity_*.json
+test_prior*/
