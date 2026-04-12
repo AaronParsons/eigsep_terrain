@@ -20,16 +20,33 @@ from eigsep_terrain_pymc import (
 )
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
+# DEFAULT_PRMS = (
+#     1734.11, 2069.00, 1760.97, 1.4706, 3.6932, -0.0493, 9830.11,
+#     1611.31, 1849.00, 1659.78, 1.2053, 1.2414, -0.0244, 5081.08,
+#     1541.90, 1998.96, 1765.06, 1.5412, 0.6147, 0.1585, 2328.64,
+#     1651.83, 2024.17, 1781.46,
+# )
 ap = argparse.ArgumentParser()
 ap.add_argument("--cache-file",       default="marjum_dem.npz")
 ap.add_argument("--img-glob",         default="/Users/komalkaur/Desktop/eigsep_stuff/hrzn_mapping/imgs/IMG*.jpg")
 ap.add_argument("--seed",             type=int,   default=None)
 ap.add_argument("--draws",            type=int,   default=2000)
+ap.add_argument("--jitter-scaling",   type=float, default=1.0)
+
+ap.add_argument("--img0-e", type=float, default=1734.11)
+ap.add_argument("--img0-n", type=float, default=2069.00)
+ap.add_argument("--img1-e", type=float, default=1611.31)
+ap.add_argument("--img1-n", type=float, default=1849.00)
+ap.add_argument("--img2-e", type=float, default=1541.90)
+ap.add_argument("--img2-n", type=float, default=1998.96)
+
+ap.add_argument("--cam-height", type=float, default=1.6)
+
 ap.add_argument("--pos-err",          type=float, default=30.0)
 ap.add_argument("--ang-err",          type=float, default=np.deg2rad(5.0))
 ap.add_argument("--log-h-sigma",      type=float, default=1.0)
 ap.add_argument("--f-err",            type=float, default=0.1)
-ap.add_argument("--jitter-scaling",   type=float, default=1.0)
+
 args = ap.parse_args()
 
 # ── seed + output names ───────────────────────────────────────────────────────
@@ -45,6 +62,7 @@ TXT_OUT    = os.path.join(OUT_DIR, "prior_check.txt")
 # ── shared metadata string (goes on every plot) ───────────────────────────────
 META_STR = (
     f"seed={SEED}  |  draws={args.draws}  |  "
+    f"cam_height={args.cam_height}m  |  "
     f"pos_err={args.pos_err:.1f}m  |  ang_err={np.rad2deg(args.ang_err):.2f}°  |  "
     f"log_h_sigma={args.log_h_sigma}  |  f_err={args.f_err}  |  "
     f"jitter_scaling={args.jitter_scaling}"
@@ -65,8 +83,12 @@ imgs  = [img for img in imgs if img.key in meta]
 
 fit_imgs, static_imgs = imgs, []
 img_keys = [img.key for img in fit_imgs]
-
 prms_u = np.asarray(DEFAULT_PRMS, dtype=dtype_r)
+# correct for weird camera heights
+prms_u[2] = dem.interp_alt(args.img0_e, args.img0_n) + args.cam_height
+prms_u[9] = dem.interp_alt(args.img1_e, args.img1_n) + args.cam_height
+prms_u[16] = dem.interp_alt(args.img2_e, args.img2_n) + args.cam_height
+
 _apply_prms_to_dem_and_meta(dem, meta, img_keys, prms_u, len(PRM_ORDER))
 
 ps = PositionSolver(dem["platform"], fit_imgs, static_imgs, N_RAYS, dem,
@@ -140,7 +162,7 @@ with open(TXT_OUT, "w") as log_fh:
         axes[row, 0].axvline(init_h, color='r', label=f'init h={init_h:.2f}')
         axes[row, 0].axvline(jittered_h, color='orange', linestyle='--',
                              label=f'jittered h={jittered_h:.2f}')
-        axes[row, 0].set_title(f"Cam {k}: h above ground [m]")
+        axes[row, 0].set_title(f"Cam {k}: init - jittered = {(init_h-jittered_h):.2f}")
         axes[row, 0].set_xlabel('height above DEM height [m]')
         axes[row, 0].set_ylabel('counts')
         axes[row, 0].legend()
