@@ -4,13 +4,13 @@ PositionSolver.get_mcmc_prms(), convert log_h -> u, and compare
 against dem.interp_alt to verify physical plausibility.
 """
 import argparse
+import os
 import numpy as np
 import pymc as pm
 import arviz as az
 import matplotlib.pyplot as plt
 from itertools import combinations
 import glob
-import os
 
 # ── project imports ──────────────────────────────────────────────────────────
 from eigsep_terrain.marjum_dem import MarjumDEM as DEM
@@ -36,16 +36,24 @@ args = ap.parse_args()
 SEED    = args.seed if args.seed is not None else int(np.random.randint(1000))
 OUT_DIR = f"test_prior_seed{SEED:03d}"
 os.makedirs(OUT_DIR, exist_ok=True)
-PLOT_OUT  = os.path.join(OUT_DIR, "prior_check.png")
-TRACE_OUT = os.path.join(OUT_DIR, "prior_trace.png")
-CORNER_OUT= os.path.join(OUT_DIR, "prior_corner.png")
-TXT_OUT   = os.path.join(OUT_DIR, "prior_check.txt")
+PLOT_OUT   = os.path.join(OUT_DIR, "prior_check.png")
+TRACE_OUT  = os.path.join(OUT_DIR, "prior_trace.png")
+CORNER_OUT = os.path.join(OUT_DIR, "prior_corner.png")
 HEIGHT_OUT = os.path.join(OUT_DIR, "height_trace.png")
+TXT_OUT    = os.path.join(OUT_DIR, "prior_check.txt")
+
+# ── shared metadata string (goes on every plot) ───────────────────────────────
+META_STR = (
+    f"seed={SEED}  |  draws={args.draws}  |  "
+    f"pos_err={args.pos_err:.1f}m  |  ang_err={np.rad2deg(args.ang_err):.2f}°  |  "
+    f"log_h_sigma={args.log_h_sigma}  |  f_err={args.f_err}  |  "
+    f"jitter_scaling={args.jitter_scaling}"
+)
 
 # ── config ────────────────────────────────────────────────────────────────────
 CACHE  = args.cache_file
 IMGS   = args.img_glob
-N_RAYS = 100   # unused for prior-only, just satisfies PositionSolver
+N_RAYS = 100
 DRAWS  = args.draws
 
 # ── setup ─────────────────────────────────────────────────────────────────────
@@ -99,31 +107,35 @@ with open(TXT_OUT, "w") as log_fh:
         f"  log_h_sigma={args.log_h_sigma}  f_err={args.f_err}  jitter_scaling={args.jitter_scaling}",
         "",
     ])
-    print(header); log_fh.write(header + "\n")
+    print(header)
+    log_fh.write(header + "\n")
 
-    # histogram for each image
+    # ── prior_check histogram ─────────────────────────────────────────────────
     fig, axes = plt.subplots(len(fit_imgs) + 1, 2,
-                             figsize=(10, 3 * (len(fit_imgs) + 1)))
+                             figsize=(10, 3 * (len(fit_imgs) + 1) + 0.8))
+    fig.suptitle(f"Prior check: h and u distributions\n{META_STR}",
+                 fontsize=7, y=1.01)
 
-    # height for each step in trace for each image
+    # ── height trace ──────────────────────────────────────────────────────────
     h_fig, h_axes = plt.subplots(len(fit_imgs), 2,
-                             figsize=(10, 3 * (len(fit_imgs) + 1)))
-    
+                                 figsize=(10, 3 * len(fit_imgs) + 0.8))
+    h_fig.suptitle(f"Trace vs DEM U and height for each image\n{META_STR}",
+                   fontsize=7, y=1.01)
+
     for row, img in enumerate(fit_imgs):
-        k      = img.key
-        e_s    = prior[f"{k}_e"].values.flatten()
-        n_s    = prior[f"{k}_n"].values.flatten()
-        lh_s   = prior[f"{k}_log_h"].values.flatten()
+        k   = img.key
+        e_s = prior[f"{k}_e"].values.flatten()
+        n_s = prior[f"{k}_n"].values.flatten()
+        lh_s= prior[f"{k}_log_h"].values.flatten()
 
         h_s, u0_s, u_s = compare_logh_u(e_s, n_s, lh_s, f"img {img.filename}", log_fh)
 
         init_h = img.prms['u'] - float(dem.interp_alt(img.prms['e'], img.prms['n']))
-        rng = np.random.default_rng(SEED)
-        jitter_h = rng.normal(0.0, args.log_h_sigma * args.jitter_scaling)
+        rng_j  = np.random.default_rng(SEED)
+        jitter_h   = rng_j.normal(0.0, args.log_h_sigma * args.jitter_scaling)
         jittered_h = np.exp(np.log(max(init_h, 1e-3)) + jitter_h)
 
-        # histograms 
-
+        # histograms
         axes[row, 0].hist(h_s, bins=50)
         axes[row, 0].axvline(init_h, color='r', label=f'init h={init_h:.2f}')
         axes[row, 0].axvline(jittered_h, color='orange', linestyle='--',
@@ -140,9 +152,9 @@ with open(TXT_OUT, "w") as log_fh:
         axes[row, 1].set_ylabel('counts')
         axes[row, 1].legend()
 
-        # height plots
+        # height traces
         h_axes[row, 0].plot(u0_s, label='DEM U', alpha=0.3)
-        h_axes[row, 0].plot(u_s, label='Image U', alpha=0.3)
+        h_axes[row, 0].plot(u_s,  label='Image U', alpha=0.3)
         h_axes[row, 0].set_title(f'Cam {k}: trace vs U')
         h_axes[row, 0].set_xlabel('Step')
         h_axes[row, 0].set_ylabel('up coord [m]')
@@ -152,10 +164,6 @@ with open(TXT_OUT, "w") as log_fh:
         h_axes[row, 1].set_title(f'Cam {k}: trace vs height')
         h_axes[row, 1].set_xlabel('Step')
         h_axes[row, 1].set_ylabel('height above DEM ground [m]')
-
-        h_fig.suptitle('Trace vs DEM U and height for each image')
-        h_fig.savefig(HEIGHT_OUT, dpi=100)
-        print(f"Trace vs height plot saved to {HEIGHT_OUT}")
 
     # antenna
     ae_s  = prior["ant_e"].values.flatten()
@@ -182,35 +190,40 @@ with open(TXT_OUT, "w") as log_fh:
     axes[-1, 1].legend()
 
 fig.tight_layout()
-fig.savefig(PLOT_OUT, dpi=120)
-print(f"\nPlot saved to {PLOT_OUT}")
+fig.savefig(PLOT_OUT, dpi=120, bbox_inches="tight")
+print(f"Plot saved to {PLOT_OUT}")
+
+h_fig.tight_layout()
+h_fig.savefig(HEIGHT_OUT, dpi=100, bbox_inches="tight")
+print(f"Height trace plot saved to {HEIGHT_OUT}")
+
 print(f"Text summary saved to {TXT_OUT}")
 
-# ── trace plot (should look like white noise) ─────────────────────────────────
-var_names = [f"{img.key}_{k}" for img in fit_imgs for k in PRM_ORDER
-             if k != 'u'] + \
-            [f"{img.key}_log_h" for img in fit_imgs] + \
-            ["ant_e", "ant_n", "ant_log_h"]
+# ── trace plot ────────────────────────────────────────────────────────────────
+var_names = ([f"{img.key}_{k}" for img in fit_imgs for k in PRM_ORDER if k != 'u'] +
+             [f"{img.key}_log_h" for img in fit_imgs] +
+             ["ant_e", "ant_n", "ant_log_h"])
 
-# sample_prior_predictive gives a single "chain"; reshape to fake chain/draw dims
-# so az.plot_trace works as expected
 axes_trace = az.plot_trace(prior_trace.prior, var_names=var_names, compact=False)
-fig_trace = axes_trace.ravel()[0].get_figure()
-fig_trace.suptitle(f"Prior trace (should be white noise)  [seed={SEED}]", y=1.01)
+fig_trace  = axes_trace.ravel()[0].get_figure()
+fig_trace.suptitle(
+    f"Prior trace (should be white noise)\n{META_STR}",
+    fontsize=7, y=1.01,
+)
 fig_trace.savefig(TRACE_OUT, dpi=100, bbox_inches="tight")
 print(f"Trace plot saved to {TRACE_OUT}")
 
-# ── corner / pair plot (custom — full control over layout) ───────────────────
+# ── corner / pair plot ────────────────────────────────────────────────────────
 PARAM_META = {
-    "e":      ("East position",       "m"),
-    "n":      ("North position",      "m"),
-    "log_h":  ("log(height AGL)",     "log m"),
-    "th":     ("Elevation angle θ",   "rad"),
-    "ph":     ("Azimuth angle φ",     "rad"),
-    "ti":     ("Camera roll τ",       "rad"),
-    "f":      ("Focal length",        "px"),
+    "e":      ("East position",     "m"),
+    "n":      ("North position",    "m"),
+    "log_h":  ("log(height AGL)",   "log m"),
+    "th":     ("Elevation angle θ", "rad"),
+    "ph":     ("Azimuth angle φ",   "rad"),
+    "ti":     ("Camera roll τ",     "rad"),
+    "f":      ("Focal length",      "px"),
 }
- 
+
 def make_label(pymc_name):
     for prefix in [f"{img.key}_" for img in fit_imgs] + ["ant_"]:
         if pymc_name.startswith(prefix):
@@ -221,14 +234,14 @@ def make_label(pymc_name):
         suffix, src_str = pymc_name, ""
     label, unit = PARAM_META.get(suffix, (suffix, ""))
     return src_str, label, unit
- 
+
 corner_vars = (
     [f"{img.key}_{k}" for img in fit_imgs for k in ("e", "n", "log_h")] +
     ["ant_e", "ant_n", "ant_log_h"]
 )
- 
+
 # collect init values + sigmas
-init_vals = {}
+init_vals  = {}
 sigmas_map = {}
 for ji, jimg in enumerate(fit_imgs):
     k    = jimg.key
@@ -241,7 +254,7 @@ for ji, jimg in enumerate(fit_imgs):
         pname = f"{k}_log_h" if pk == "u" else f"{k}_{pk}"
         if pname in corner_vars:
             sigmas_map[pname] = ps.sigmas[base + ki]
- 
+
 ant_e0, ant_n0, ant_u_init = ps.ant_pos_prior
 ant_u0 = float(dem.interp_alt(ant_e0, ant_n0))
 init_vals["ant_e"]     = ant_e0
@@ -250,30 +263,32 @@ init_vals["ant_log_h"] = np.log(max(ant_u_init - ant_u0, 1e-3))
 n_cam_prms = len(fit_imgs) * len(PRM_ORDER)
 for ki, suffix in enumerate(("e", "n", "log_h")):
     sigmas_map[f"ant_{suffix}"] = ps.sigmas[n_cam_prms + ki]
- 
+
 prior_data = prior_trace.prior
 samples    = {v: prior_data[v].values.flatten() for v in corner_vars}
- 
-n  = len(corner_vars)
-# use upper triangle for legend + summary text; lower triangle for hexbin; diagonal for hist
-cell = 2.2   # inches per cell
-fig_corner, axes_c = plt.subplots(n, n, figsize=(cell * n, cell * n))
- 
+
+n    = len(corner_vars)
+cell = 2.2
+fig_corner, axes_c = plt.subplots(n, n, figsize=(cell * n, cell * n + 0.8))
+fig_corner.suptitle(
+    f"Prior pair plot  —  expect uncorrelated blobs\n{META_STR}",
+    fontsize=7, y=1.005,
+)
+
 for i in range(n):
-    vi = corner_vars[i]
+    vi    = corner_vars[i]
     src_i, lbl_i, unit_i = make_label(vi)
-    xi = samples[vi]
-    iv_i = init_vals[vi]
+    xi    = samples[vi]
+    iv_i  = init_vals[vi]
     sig_i = sigmas_map.get(vi, None)
- 
+
     for j in range(n):
-        ax  = axes_c[i, j]
-        vj  = corner_vars[j]
-        xj  = samples[vj]
+        ax   = axes_c[i, j]
+        vj   = corner_vars[j]
+        xj   = samples[vj]
         iv_j = init_vals[vj]
- 
+
         if i == j:
-            # ── diagonal: marginal histogram ──
             ax.hist(xi, bins=40, color="steelblue", density=True, alpha=0.8)
             ax.axvline(iv_i, color="red", lw=1.5)
             if sig_i is not None:
@@ -281,9 +296,8 @@ for i in range(n):
             ax.set_yticks([])
             src_i2, lbl_i2, unit_i2 = make_label(vi)
             ax.set_title(f"{src_i2}\n{lbl_i2}\n[{unit_i2}]", fontsize=6, pad=2)
- 
+
         elif i > j:
-            # ── lower triangle: hexbin scatter ──
             src_j, lbl_j, unit_j = make_label(vj)
             ax.hexbin(xj, xi, gridsize=25, cmap="viridis", linewidths=0.2)
             ax.axvline(iv_j, color="red", lw=0.8, alpha=0.7)
@@ -297,12 +311,10 @@ for i in range(n):
             if i == n - 1:
                 src_j2, lbl_j2, unit_j2 = make_label(vj)
                 ax.set_xlabel(f"{src_j2}\n{lbl_j2}\n[{unit_j2}]", fontsize=6)
- 
+
         else:
-            # ── upper triangle: summary stats text ──
             ax.axis("off")
             if i == 0 and j == n - 1:
-                # top-right cell: global legend
                 legend_txt = (
                     "Prior pair plot\n"
                     "───────────────\n"
@@ -326,14 +338,11 @@ for i in range(n):
                         bbox=dict(boxstyle="round,pad=0.4", fc="#f5f5f5",
                                   ec="gray", alpha=0.9))
             else:
-                # other upper cells: mean ± std of each var
-                mu_i  = xi.mean()
-                std_i = xi.std()
-                mu_j  = xj.mean()
-                std_j = xj.std()
+                mu_i  = xi.mean();  std_i = xi.std()
+                mu_j  = xj.mean();  std_j = xj.std()
                 r     = float(np.corrcoef(xi, xj)[0, 1])
-                src_i2, lbl_i2, unit_i2 = make_label(vi)
-                src_j2, lbl_j2, unit_j2 = make_label(vj)
+                src_i2, lbl_i2, _ = make_label(vi)
+                src_j2, lbl_j2, _ = make_label(vj)
                 txt = (f"{lbl_i2}\n"
                        f"  μ={mu_i:.2f}  σ={std_i:.2f}\n\n"
                        f"{lbl_j2}\n"
@@ -343,23 +352,9 @@ for i in range(n):
                         fontsize=6, va="top",
                         bbox=dict(boxstyle="round,pad=0.3", fc="#f0f0f0",
                                   ec="lightgray", alpha=0.9))
- 
-        # tick label size
+
         ax.tick_params(labelsize=5)
- 
-plt.suptitle(
-    f"Prior pair plot  [seed={SEED}]  —  expect uncorrelated blobs\n"
-    f"Red line = init value   |   Red band = ±1σ prior   |   r = Pearson correlation",
-    fontsize=8, y=1.005,
-)
+
 plt.tight_layout(pad=0.4)
 fig_corner.savefig(CORNER_OUT, dpi=130, bbox_inches="tight")
-print(f"Corner plot saved to {CORNER_OUT}")
- 
-fig_corner.suptitle(
-    f"Prior pair plot — expect uncorrelated blobs  [seed={SEED}]\n"
-    f"Red line = init value,  shading = ±1σ prior",
-    y=1.01, fontsize=9,
-)
-fig_corner.savefig(CORNER_OUT, dpi=100, bbox_inches="tight")
 print(f"Corner plot saved to {CORNER_OUT}")
