@@ -39,6 +39,7 @@ PLOT_OUT  = os.path.join(OUT_DIR, "prior_check.png")
 TRACE_OUT = os.path.join(OUT_DIR, "prior_trace.png")
 CORNER_OUT= os.path.join(OUT_DIR, "prior_corner.png")
 TXT_OUT   = os.path.join(OUT_DIR, "prior_check.txt")
+HEIGHT_OUT = os.path.join(OUT_DIR, "height_trace.png")
 
 # ── config ────────────────────────────────────────────────────────────────────
 CACHE  = args.cache_file
@@ -99,9 +100,14 @@ with open(TXT_OUT, "w") as log_fh:
     ])
     print(header); log_fh.write(header + "\n")
 
+    # histogram for each image
     fig, axes = plt.subplots(len(fit_imgs) + 1, 2,
                              figsize=(10, 3 * (len(fit_imgs) + 1)))
 
+    # height for each step in trace for each image
+    h_fig, h_axes = plt.subplots(len(fit_imgs), 2,
+                             figsize=(10, 3 * (len(fit_imgs) + 1)))
+    
     for row, img in enumerate(fit_imgs):
         k      = img.key
         e_s    = prior[f"{k}_e"].values.flatten()
@@ -115,17 +121,40 @@ with open(TXT_OUT, "w") as log_fh:
         jitter_h = rng.normal(0.0, args.log_h_sigma * args.jitter_scaling)
         jittered_h = np.exp(np.log(max(init_h, 1e-3)) + jitter_h)
 
+        # histograms 
+
         axes[row, 0].hist(h_s, bins=50)
         axes[row, 0].axvline(init_h, color='r', label=f'init h={init_h:.2f}')
         axes[row, 0].axvline(jittered_h, color='orange', linestyle='--',
                              label=f'jittered h={jittered_h:.2f}')
         axes[row, 0].set_title(f"Cam {k}: h above ground [m]")
+        axes[row, 0].set_xlabel('height above DEM height [m]')
+        axes[row, 0].set_ylabel('counts')
         axes[row, 0].legend()
 
         axes[row, 1].hist(u_s, bins=50)
         axes[row, 1].axvline(img.prms['u'], color='r', label=f"init u={img.prms['u']:.1f}")
         axes[row, 1].set_title(f"Cam {k}: absolute u [m]")
+        axes[row, 1].set_xlabel('DEM height [m]')
+        axes[row, 1].set_ylabel('counts')
         axes[row, 1].legend()
+
+        # height plots
+        h_axes[row, 0].plot(u0_s, label='DEM U', alpha=0.3)
+        h_axes[row, 0].plot(u_s, label='Image U', alpha=0.3)
+        h_axes[row, 0].set_title(f'Cam {k}: trace vs U')
+        h_axes[row, 0].set_xlabel('Step')
+        h_axes[row, 0].set_ylabel('up coord [m]')
+        h_axes[row, 0].legend()
+
+        h_axes[row, 1].plot(h_s)
+        h_axes[row, 1].set_title(f'Cam {k}: trace vs height')
+        h_axes[row, 1].set_xlabel('Step')
+        h_axes[row, 1].set_ylabel('height above DEM ground [m]')
+
+        h_fig.suptitle('Trace vs DEM U and height for each image')
+        h_fig.savefig(HEIGHT_OUT, dpi=100)
+        print(f"Trace vs height plot saved to {HEIGHT_OUT}")
 
     # antenna
     ae_s  = prior["ant_e"].values.flatten()
@@ -140,15 +169,19 @@ with open(TXT_OUT, "w") as log_fh:
     axes[-1, 0].hist(ah_s, bins=50)
     axes[-1, 0].axvline(ant_h_init, color='r', label=f'init h={ant_h_init:.2f}')
     axes[-1, 0].set_title("Antenna: h above ground [m]")
+    axes[-1, 0].set_xlabel('height above DEM height [m]')
+    axes[-1, 0].set_ylabel('counts')
     axes[-1, 0].legend()
 
     axes[-1, 1].hist(au_s, bins=50)
     axes[-1, 1].axvline(ant_u_init, color='r', label=f'init u={ant_u_init:.1f}')
     axes[-1, 1].set_title("Antenna: absolute u [m]")
+    axes[-1, 1].set_xlabel('DEM height [m]')
+    axes[-1, 1].set_ylabel('counts')
     axes[-1, 1].legend()
 
-plt.tight_layout()
-plt.savefig(PLOT_OUT, dpi=120)
+fig.tight_layout()
+fig.savefig(PLOT_OUT, dpi=120)
 print(f"\nPlot saved to {PLOT_OUT}")
 print(f"Text summary saved to {TXT_OUT}")
 
