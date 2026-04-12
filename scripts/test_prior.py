@@ -8,6 +8,7 @@ import numpy as np
 import pymc as pm
 import arviz as az
 import matplotlib.pyplot as plt
+from itertools import combinations
 import glob
 import os
 
@@ -199,19 +200,166 @@ fig_trace.suptitle(f"Prior trace (should be white noise)  [seed={SEED}]", y=1.01
 fig_trace.savefig(TRACE_OUT, dpi=100, bbox_inches="tight")
 print(f"Trace plot saved to {TRACE_OUT}")
 
-# ── corner / pair plot ────────────────────────────────────────────────────────
-# focus on the physically interesting params: positions + log_h for each camera + antenna
-corner_vars = [f"{img.key}_{k}" for img in fit_imgs for k in ("e", "n", "log_h")] + \
-              ["ant_e", "ant_n", "ant_log_h"]
-
-axes_corner = az.plot_pair(
-    prior_trace.prior,
-    var_names=corner_vars,
-    kind="hexbin",
-    marginals=True,
-    textsize=8,
+# ── corner / pair plot (custom — full control over layout) ───────────────────
+PARAM_META = {
+    "e":      ("East position",       "m"),
+    "n":      ("North position",      "m"),
+    "log_h":  ("log(height AGL)",     "log m"),
+    "th":     ("Elevation angle θ",   "rad"),
+    "ph":     ("Azimuth angle φ",     "rad"),
+    "ti":     ("Camera roll τ",       "rad"),
+    "f":      ("Focal length",        "px"),
+}
+ 
+def make_label(pymc_name):
+    for prefix in [f"{img.key}_" for img in fit_imgs] + ["ant_"]:
+        if pymc_name.startswith(prefix):
+            suffix  = pymc_name[len(prefix):]
+            src_str = "antenna" if prefix == "ant_" else f"cam {prefix.rstrip('_')}"
+            break
+    else:
+        suffix, src_str = pymc_name, ""
+    label, unit = PARAM_META.get(suffix, (suffix, ""))
+    return src_str, label, unit
+ 
+corner_vars = (
+    [f"{img.key}_{k}" for img in fit_imgs for k in ("e", "n", "log_h")] +
+    ["ant_e", "ant_n", "ant_log_h"]
 )
-fig_corner = axes_corner.ravel()[0].get_figure()
-fig_corner.suptitle(f"Prior pair plot (expect no correlations)  [seed={SEED}]", y=1.01)
+ 
+# collect init values + sigmas
+init_vals = {}
+sigmas_map = {}
+for ji, jimg in enumerate(fit_imgs):
+    k    = jimg.key
+    base = ji * len(PRM_ORDER)
+    u0   = float(dem.interp_alt(jimg.prms["e"], jimg.prms["n"]))
+    init_vals[f"{k}_e"]     = jimg.prms["e"]
+    init_vals[f"{k}_n"]     = jimg.prms["n"]
+    init_vals[f"{k}_log_h"] = np.log(max(jimg.prms["u"] - u0, 1e-3))
+    for ki, pk in enumerate(PRM_ORDER):
+        pname = f"{k}_log_h" if pk == "u" else f"{k}_{pk}"
+        if pname in corner_vars:
+            sigmas_map[pname] = ps.sigmas[base + ki]
+ 
+ant_e0, ant_n0, ant_u_init = ps.ant_pos_prior
+ant_u0 = float(dem.interp_alt(ant_e0, ant_n0))
+init_vals["ant_e"]     = ant_e0
+init_vals["ant_n"]     = ant_n0
+init_vals["ant_log_h"] = np.log(max(ant_u_init - ant_u0, 1e-3))
+n_cam_prms = len(fit_imgs) * len(PRM_ORDER)
+for ki, suffix in enumerate(("e", "n", "log_h")):
+    sigmas_map[f"ant_{suffix}"] = ps.sigmas[n_cam_prms + ki]
+ 
+prior_data = prior_trace.prior
+samples    = {v: prior_data[v].values.flatten() for v in corner_vars}
+ 
+n  = len(corner_vars)
+# use upper triangle for legend + summary text; lower triangle for hexbin; diagonal for hist
+cell = 2.2   # inches per cell
+fig_corner, axes_c = plt.subplots(n, n, figsize=(cell * n, cell * n))
+ 
+for i in range(n):
+    vi = corner_vars[i]
+    src_i, lbl_i, unit_i = make_label(vi)
+    xi = samples[vi]
+    iv_i = init_vals[vi]
+    sig_i = sigmas_map.get(vi, None)
+ 
+    for j in range(n):
+        ax  = axes_c[i, j]
+        vj  = corner_vars[j]
+        xj  = samples[vj]
+        iv_j = init_vals[vj]
+ 
+        if i == j:
+            # ── diagonal: marginal histogram ──
+            ax.hist(xi, bins=40, color="steelblue", density=True, alpha=0.8)
+            ax.axvline(iv_i, color="red", lw=1.5)
+            if sig_i is not None:
+                ax.axvspan(iv_i - sig_i, iv_i + sig_i, alpha=0.18, color="red")
+            ax.set_yticks([])
+            src_i2, lbl_i2, unit_i2 = make_label(vi)
+            ax.set_title(f"{src_i2}\n{lbl_i2}\n[{unit_i2}]", fontsize=6, pad=2)
+ 
+        elif i > j:
+            # ── lower triangle: hexbin scatter ──
+            src_j, lbl_j, unit_j = make_label(vj)
+            ax.hexbin(xj, xi, gridsize=25, cmap="viridis", linewidths=0.2)
+            ax.axvline(iv_j, color="red", lw=0.8, alpha=0.7)
+            ax.axhline(iv_i, color="red", lw=0.8, alpha=0.7)
+            r = float(np.corrcoef(xi, xj)[0, 1])
+            ax.text(0.04, 0.96, f"r={r:.2f}", transform=ax.transAxes,
+                    fontsize=6, va="top", color="white",
+                    bbox=dict(boxstyle="round,pad=0.15", fc="black", alpha=0.55))
+            if j == 0:
+                ax.set_ylabel(f"{src_i}\n{lbl_i}\n[{unit_i}]", fontsize=6)
+            if i == n - 1:
+                src_j2, lbl_j2, unit_j2 = make_label(vj)
+                ax.set_xlabel(f"{src_j2}\n{lbl_j2}\n[{unit_j2}]", fontsize=6)
+ 
+        else:
+            # ── upper triangle: summary stats text ──
+            ax.axis("off")
+            if i == 0 and j == n - 1:
+                # top-right cell: global legend
+                legend_txt = (
+                    "Prior pair plot\n"
+                    "───────────────\n"
+                    "Diagonal: marginal\n"
+                    "  prior distribution\n\n"
+                    "Lower tri: hexbin\n"
+                    "  joint distribution\n\n"
+                    "Upper tri: summary\n"
+                    "  statistics\n\n"
+                    "─── Red line ───\n"
+                    "  init value\n\n"
+                    "─── Red band ───\n"
+                    "  ±1σ prior width\n\n"
+                    "r = Pearson\n"
+                    "  correlation\n"
+                    "(expect ~0 for\n"
+                    "independent priors)"
+                )
+                ax.text(0.05, 0.97, legend_txt, transform=ax.transAxes,
+                        fontsize=6.5, va="top", family="monospace",
+                        bbox=dict(boxstyle="round,pad=0.4", fc="#f5f5f5",
+                                  ec="gray", alpha=0.9))
+            else:
+                # other upper cells: mean ± std of each var
+                mu_i  = xi.mean()
+                std_i = xi.std()
+                mu_j  = xj.mean()
+                std_j = xj.std()
+                r     = float(np.corrcoef(xi, xj)[0, 1])
+                src_i2, lbl_i2, unit_i2 = make_label(vi)
+                src_j2, lbl_j2, unit_j2 = make_label(vj)
+                txt = (f"{lbl_i2}\n"
+                       f"  μ={mu_i:.2f}  σ={std_i:.2f}\n\n"
+                       f"{lbl_j2}\n"
+                       f"  μ={mu_j:.2f}  σ={std_j:.2f}\n\n"
+                       f"r = {r:.3f}")
+                ax.text(0.05, 0.95, txt, transform=ax.transAxes,
+                        fontsize=6, va="top",
+                        bbox=dict(boxstyle="round,pad=0.3", fc="#f0f0f0",
+                                  ec="lightgray", alpha=0.9))
+ 
+        # tick label size
+        ax.tick_params(labelsize=5)
+ 
+plt.suptitle(
+    f"Prior pair plot  [seed={SEED}]  —  expect uncorrelated blobs\n"
+    f"Red line = init value   |   Red band = ±1σ prior   |   r = Pearson correlation",
+    fontsize=8, y=1.005,
+)
+plt.tight_layout(pad=0.4)
+fig_corner.savefig(CORNER_OUT, dpi=130, bbox_inches="tight")
+print(f"Corner plot saved to {CORNER_OUT}")
+ 
+fig_corner.suptitle(
+    f"Prior pair plot — expect uncorrelated blobs  [seed={SEED}]\n"
+    f"Red line = init value,  shading = ±1σ prior",
+    y=1.01, fontsize=9,
+)
 fig_corner.savefig(CORNER_OUT, dpi=100, bbox_inches="tight")
 print(f"Corner plot saved to {CORNER_OUT}")
