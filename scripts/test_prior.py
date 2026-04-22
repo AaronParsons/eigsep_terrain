@@ -11,6 +11,7 @@ import arviz as az
 import matplotlib.pyplot as plt
 from itertools import combinations
 import glob
+from scipy import stats
 
 # ── project imports ──────────────────────────────────────────────────────────
 from eigsep_terrain.marjum_dem import MarjumDEM as DEM
@@ -57,6 +58,7 @@ PLOT_OUT   = os.path.join(OUT_DIR, "prior_check.png")
 TRACE_OUT  = os.path.join(OUT_DIR, "prior_trace.png")
 CORNER_OUT = os.path.join(OUT_DIR, "prior_corner.png")
 HEIGHT_OUT = os.path.join(OUT_DIR, "height_trace.png")
+LOGH_OUT = os.path.join(OUT_DIR, "logh_trace.png")
 TXT_OUT    = os.path.join(OUT_DIR, "prior_check.txt")
 
 # ── shared metadata string (goes on every plot) ───────────────────────────────
@@ -143,6 +145,12 @@ with open(TXT_OUT, "w") as log_fh:
                                  figsize=(10, 3 * len(fit_imgs) + 0.8))
     h_fig.suptitle(f"Trace vs DEM U and height for each image\n{META_STR}",
                    fontsize=7, y=1.01)
+    
+    # logh plots
+    lh_fig, lh_axes = plt.subplots(len(fit_imgs), 2,
+                                 figsize=(10, 3 * len(fit_imgs) + 0.8))
+    lh_fig.suptitle(f"Trace vs logh for each image\n{META_STR}",
+                   fontsize=7, y=1.01)
 
     for row, img in enumerate(fit_imgs):
         k   = img.key
@@ -156,6 +164,8 @@ with open(TXT_OUT, "w") as log_fh:
         rng_j  = np.random.default_rng(SEED)
         jitter_h   = rng_j.normal(0.0, args.log_h_sigma * args.jitter_scaling)
         jittered_h = np.exp(np.log(max(init_h, 1e-3)) + jitter_h)
+        init_lh = np.log(init_h)
+        jittered_lh = np.log(jittered_h)
 
         # histograms
         axes[row, 0].hist(h_s, bins=50)
@@ -174,6 +184,23 @@ with open(TXT_OUT, "w") as log_fh:
         axes[row, 1].set_ylabel('counts')
         axes[row, 1].legend()
 
+        # logh hist
+        n, bins, patches = lh_axes[row, 0].hist(lh_s, bins=50, density=True)  # density=True to normalize
+
+            # gaussian
+        mu, std = stats.norm.fit(lh_s)
+        x = np.linspace(lh_s.min(), lh_s.max(), 200)
+        p = stats.norm.pdf(x, mu, std)
+        lh_axes[row, 0].plot(x, p, 'b-', linewidth=2, label=f'Gaussian (μ={mu:.2f}, σ={std:.2f})')
+
+        lh_axes[row, 0].axvline(init_lh, color='r', label=f'init h={init_h:.2f}')
+        lh_axes[row, 0].axvline(jittered_lh, color='orange', linestyle='--',
+            label=f'jittered h={jittered_h:.2f}')
+        lh_axes[row, 0].set_title(f"Cam {k}: init - jittered in logh = {(init_lh-jittered_lh):.2f}")
+        lh_axes[row, 0].set_xlabel('logh')
+        lh_axes[row, 0].set_ylabel('density')
+        lh_axes[row, 0].legend()
+
         # height traces
         h_axes[row, 0].plot(u0_s, label='DEM U', alpha=0.3)
         h_axes[row, 0].plot(u_s,  label='Image U', alpha=0.3)
@@ -186,6 +213,12 @@ with open(TXT_OUT, "w") as log_fh:
         h_axes[row, 1].set_title(f'Cam {k}: trace vs height')
         h_axes[row, 1].set_xlabel('Step')
         h_axes[row, 1].set_ylabel('height above DEM ground [m]')
+
+        # loghtrace
+        lh_axes[row, 1].plot(lh_s)
+        lh_axes[row, 1].set_title(f'Cam {k}: trace vs logh')
+        lh_axes[row, 1].set_xlabel('Step')
+        lh_axes[row, 1].set_ylabel('logh')
 
     # antenna
     ae_s  = prior["ant_e"].values.flatten()
@@ -218,6 +251,10 @@ print(f"Plot saved to {PLOT_OUT}")
 h_fig.tight_layout()
 h_fig.savefig(HEIGHT_OUT, dpi=100, bbox_inches="tight")
 print(f"Height trace plot saved to {HEIGHT_OUT}")
+
+lh_fig.tight_layout()
+lh_fig.savefig(LOGH_OUT, dpi=100, bbox_inches="tight")
+print(f"logh trace plot saved to {LOGH_OUT}")
 
 print(f"Text summary saved to {TXT_OUT}")
 
