@@ -80,28 +80,78 @@ def _load(nc_path):
 
 
 def _suptitle(fig, meta, plot_name="", extra=""):
-    """Attach plot name + compact run-summary as the figure suptitle."""
-    s = meta.get("sampling", {})
+    """Attach plot name + compact run-summary as the figure suptitle.
+
+    Line 1 (bold): plot name
+    Line 2: core sampling info
+    Line 3: likelihood config (eps, ant_weight, disable_ant)
+    Line 4: MAP provenance (if run was initialised from a MAP file)
+    """
+    s  = meta.get("sampling", {})
     st = meta.get("step", {})
     lk = meta.get("likelihood", {})
-    run_parts = [
+    mf = meta.get("map_file") or {}
+
+    # ── line 2: sampling ──────────────────────────────────────────────────────
+    accept = meta.get("accepted_mean", float("nan"))
+    accept_str = f"{accept:.3f}" if isinstance(accept, float) else "?"
+    line2_parts = [
         f"seed={meta.get('seed', '?')}",
         f"draws={s.get('draws', '?')}",
         f"tune={s.get('tune', '?')}",
         f"chains={s.get('chains', '?')}",
         f"scaling={st.get('scaling', '?')}",
-        f"eps={lk.get('eps', '?')}",
-        f"n_rays={lk.get('n_rays', '?')}",
-        f"accept={meta.get('accepted_mean', float('nan')):.3f}",
+        f"tuned_scaling={st.get('tuned_scaling', '?')}",
+        f"accept={accept_str}",
     ]
     if extra:
-        run_parts.append(extra)
-    run_str = "  |  ".join(run_parts)
+        line2_parts.append(extra)
+
+    # ── line 3: likelihood config ─────────────────────────────────────────────
+    ant_weight   = lk.get("ant_weight", 1.0)
+    disable_ant  = lk.get("disable_ant", False)
+    if disable_ant:
+        ant_str = "ant=DISABLED"
+    elif ant_weight != 1.0:
+        ant_str = f"ant_weight={ant_weight}"
+    else:
+        ant_str = "ant=ON"
+    line3_parts = [
+        f"eps={lk.get('eps', '?')}",
+        f"n_rays={lk.get('n_rays', '?')}",
+        ant_str,
+    ]
+
+    # ── line 4: MAP provenance ─────────────────────────────────────────────────
+    line4_parts = []
+    if mf:
+        map_logL    = mf.get("map_logL")
+        map_method  = mf.get("map_method", "?")
+        map_conv    = mf.get("map_converged", "?")
+        map_seed    = mf.get("map_seed", "?")
+        map_nrest   = mf.get("map_n_restarts", "?")
+        logL_imp    = mf.get("logL_improvement")
+        logL_imp_str = f"{logL_imp:+.1f}" if isinstance(logL_imp, float) else "?"
+        line4_parts = [
+            f"MAP seed={map_seed}",
+            f"method={map_method}",
+            f"converged={map_conv}",
+            f"restarts={map_nrest}",
+            f"map_logL={map_logL:.1f}" if isinstance(map_logL, float) else "map_logL=?",
+            f"logL_improvement={logL_imp_str}",
+        ]
+
+    lines = ["  |  ".join(line2_parts), "  |  ".join(line3_parts)]
+    if line4_parts:
+        lines.append("MAP:  " + "  |  ".join(line4_parts))
+
+    run_str = "\n".join(lines)
+
     if plot_name:
-        fig.suptitle(plot_name + "\n" + run_str, fontsize=8, y=1.02,
+        fig.suptitle(plot_name + "\n" + run_str, fontsize=7, y=1.03,
                      fontweight="bold")
     else:
-        fig.suptitle(run_str, fontsize=7, y=1.01)
+        fig.suptitle(run_str, fontsize=7, y=1.02)
 
 
 def _param_label(name):
@@ -124,6 +174,33 @@ def _save(fig, outdir, tag):
 def _posterior_array(trace, name):
     """Return flattened posterior samples for a param name."""
     return trace.posterior[name].values.flatten()
+
+
+def _autoscale_y(ax, data, margin=0.05, symm=False):
+    """Set y-limits to [p1, p99] of data with a fractional margin.
+    If symm=True, make the range symmetric around zero (for z-score bars).
+    Ignores NaN values."""
+    data = np.asarray(data, dtype=float)
+    finite = data[np.isfinite(data)]
+    if finite.size == 0:
+        return
+    lo, hi = np.percentile(finite, 1), np.percentile(finite, 99)
+    if symm:
+        bound = max(abs(lo), abs(hi))
+        lo, hi = -bound, bound
+    span = hi - lo if hi != lo else 1.0
+    ax.set_ylim(lo - margin * span, hi + margin * span)
+
+
+def _autoscale_x(ax, samples, plo=0.5, phi=99.5, margin=0.05):
+    """Set x-limits to [plo, phi] percentile of samples with a margin.
+    Useful for histogram axes where prior tails would compress the posterior."""
+    finite = samples[np.isfinite(samples)]
+    if finite.size == 0:
+        return
+    lo, hi = np.percentile(finite, plo), np.percentile(finite, phi)
+    span = hi - lo if hi != lo else 1.0
+    ax.set_xlim(lo - margin * span, hi + margin * span)
 
 
 # ── individual plot functions ─────────────────────────────────────────────────
@@ -197,6 +274,7 @@ def plot_posterior(trace, meta, stem, outdir):
         ax.set_title(_param_label(name), fontsize=8)
         ax.set_xlabel("")
         ax.yaxis.set_major_formatter(mticker.NullFormatter())
+        _autoscale_x(ax, samples)
         ax.legend(fontsize=7)
 
     for ax in axes[len(param_names):]:
@@ -232,11 +310,17 @@ def plot_shrinkage(trace, meta, stem, outdir):
               for s in shrinkages]
     ax.bar(range(len(labels)), shrinkages, color=colors, width=0.7)
     ax.axhline(0, color="k", lw=0.5)
-    ax.axhline(0.5, color="gray", lw=0.8, ls="--", label="0.5 reference")
+    ax.axhline(0.5, color="gray", lw=0.8, ls="--", label="0.5  (data-prior boundary)")
+    ax.axhline(1.0, color="#2ecc71", lw=0.8, ls=":", alpha=0.7, label="1.0  (fully data-dominated)")
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
     ax.set_ylabel("shrinkage  (1 − post_std / prior_σ)")
-    ax.set_ylim(-0.2, 1.1)
+    # dynamic ylim: always show 0 and 1 as anchors, but expand if any value
+    # is outside that range (e.g. shrinkage > 1 if posterior wider than prior)
+    s_arr = np.array(shrinkages)
+    lo = min(-0.15, float(s_arr.min()) - 0.05)
+    hi = max(1.10,  float(s_arr.max()) + 0.05)
+    ax.set_ylim(lo, hi)
     ax.legend(fontsize=8)
     _suptitle(fig, meta, plot_name="Shrinkage")
     _save(fig, outdir, "shrinkage")
@@ -299,9 +383,20 @@ def plot_acceptance(trace, meta, stem, outdir, window=100):
     overall = float(accepted.mean())
     ax.axhline(overall, color="k", ls="--", lw=0.8,
                label=f"overall {overall:.3f}")
+    ax.axhspan(0.20, 0.40, color="green", alpha=0.08, label="ideal 0.20–0.40")
+    ax.axhline(0.20, color="green", lw=0.7, ls="--", alpha=0.5)
+    ax.axhline(0.40, color="green", lw=0.7, ls="--", alpha=0.5)
     ax.set_xlabel(f"draw  (rolling window={window})")
     ax.set_ylabel("acceptance rate")
-    ax.set_ylim(0, 1)
+    # collect all rolling values to set a tight but complete y range
+    all_rolls = []
+    for c in range(n_chains):
+        roll = np.convolve(accepted[c].astype(float),
+                           np.ones(window) / window, mode="valid")
+        all_rolls.extend(roll.tolist())
+    lo = max(0.0,  float(np.min(all_rolls)) - 0.05)
+    hi = min(1.0,  float(np.max(all_rolls)) + 0.05)
+    ax.set_ylim(lo, hi)
     ax.legend()
     _suptitle(fig, meta, plot_name="Rolling acceptance rate")
     _save(fig, outdir, "acceptance")
@@ -334,6 +429,7 @@ def plot_sampler_stats(trace, meta, stem, outdir):
         for c in range(vals.shape[0]):
             ax.plot(vals[c], lw=0.6, alpha=0.8, label=f"chain {c}")
         ax.set_ylabel(ylabel)
+        _autoscale_y(ax, vals.flatten())
         ax.legend(fontsize=7)
 
     axes[-1].set_xlabel("draw")
@@ -395,6 +491,8 @@ def plot_prior_predictive(trace, meta, stem, outdir, n_samples=2000):
 
         ax.set_title(_param_label(name), fontsize=8)
         ax.yaxis.set_major_formatter(mticker.NullFormatter())
+        # zoom x to posterior bulk — prior tails can be orders of magnitude wider
+        _autoscale_x(ax, post)
         ax.legend(fontsize=6, ncol=2)
 
     for ax in axes[len(param_names):]:
@@ -469,7 +567,8 @@ def plot_step_size(trace, meta, stem, outdir):
     ax1.axhline(0.3, color="gray", lw=0.8, ls="--")
     ax1.axhline(0.6, color="gray", lw=0.8, ls="--")
     ax1.set_ylabel("step / post_std")
-    ax1.set_ylim(bottom=0)
+    finite1 = [v for v in step_over_post if not np.isnan(v)]
+    ax1.set_ylim(bottom=0, top=max(max(finite1) * 1.15, 0.65) if finite1 else 1.0)
     ax1.legend(fontsize=8)
     ax1.text(0.99, 0.97, f"tuned scaling = {tuned_scaling}",
              transform=ax1.transAxes, ha="right", va="top", fontsize=8,
@@ -481,7 +580,8 @@ def plot_step_size(trace, meta, stem, outdir):
     ax2.bar(x, step_over_prior, color=colors2, width=0.7)
     ax2.axhline(0.15, color="gray", lw=0.8, ls="--", label="0.15 reference")
     ax2.set_ylabel("step / prior_σ")
-    ax2.set_ylim(bottom=0)
+    finite2 = [v for v in step_over_prior if not np.isnan(v)]
+    ax2.set_ylim(bottom=0, top=max(max(finite2) * 1.15, 0.20) if finite2 else 1.0)
     ax2.legend(fontsize=8)
 
     ax2.set_xticks(x)
@@ -550,19 +650,21 @@ def plot_prior_sensitivity(trace, meta, stem, outdir):
     ax1.bar(x, zscores, color=colors1, width=0.7)
     ax1.axhspan(-0.5, 0.5, color="gray", alpha=0.12, label="|z| < 0.5 (prior-dominated)")
     ax1.axhline(0, color="k", lw=0.5)
-    ax1.axhline( 2, color="#c0392b", lw=0.8, ls="--", alpha=0.6)
+    ax1.axhline( 2, color="#c0392b", lw=0.8, ls="--", alpha=0.6, label="|z| = 2")
     ax1.axhline(-2, color="#c0392b", lw=0.8, ls="--", alpha=0.6)
     ax1.set_ylabel("z-score  (post_mean − prior_μ) / prior_σ")
+    _autoscale_y(ax1, zscores, margin=0.1, symm=True)
     ax1.legend(fontsize=8)
 
     # Panel 2: contraction ratio (log scale)
     colors2 = ["#5cb85c" if r < 0.5 else "#f0ad4e" if r < 0.85 else "#d9534f"
                for r in ratios]
     ax2.bar(x, ratios, color=colors2, width=0.7)
-    ax2.axhline(1.0, color="k", lw=0.8, ls="--", label="ratio = 1 (no contraction)")
+    ax2.axhline(1.0, color="k", lw=0.8, ls="--", label="ratio = 1  (no contraction)")
     ax2.axhline(0.5, color="gray", lw=0.8, ls="--", alpha=0.6, label="ratio = 0.5")
     ax2.set_ylabel("contraction  post_std / prior_σ")
-    ax2.set_ylim(0, max(1.2, max(r for r in ratios if not np.isnan(r)) * 1.1))
+    finite_r = [r for r in ratios if not np.isnan(r)]
+    ax2.set_ylim(0, max(1.1, max(finite_r) * 1.15) if finite_r else 1.2)
     ax2.legend(fontsize=8)
 
     ax2.set_xticks(x)
@@ -580,7 +682,7 @@ def build_argparser():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--nc_file", help="Path to the ArviZ .nc trace file")
+    ap.add_argument("nc_file", help="Path to the ArviZ .nc trace file")
 
     # plot toggles
     ap.add_argument("--trace",      action="store_true", help="Chain timeseries + marginal KDE")
