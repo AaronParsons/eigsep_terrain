@@ -160,10 +160,12 @@ with open(TXT_OUT, "w") as log_fh:
 
         h_s, u0_s, u_s = compare_logh_u(e_s, n_s, lh_s, f"img {img.filename}", log_fh)
 
-        init_h = img.prms['u'] - float(dem.interp_alt(img.prms['e'], img.prms['n']))
-        rng_j  = np.random.default_rng(SEED)
-        jitter_h   = rng_j.normal(0.0, args.log_h_sigma * args.jitter_scaling)
-        jittered_h = np.exp(np.log(max(init_h, 1e-3)) + jitter_h)
+        # init_h = img.prms['u'] - float(dem.interp_alt(img.prms['e'], img.prms['n']))
+        init_h = h_s[0]
+        # rng_j  = np.random.default_rng(SEED)
+        # jitter_h   = rng_j.normal(0.0, args.log_h_sigma * args.jitter_scaling)
+        # jittered_h = np.exp(np.log(max(init_h, 1e-3)) + jitter_h)
+        jittered_h = h_s[-1]
         init_lh = np.log(init_h)
         jittered_lh = np.log(jittered_h)
 
@@ -193,9 +195,9 @@ with open(TXT_OUT, "w") as log_fh:
         p = stats.norm.pdf(x, mu, std)
         lh_axes[row, 0].plot(x, p, 'b-', linewidth=2, label=f'Gaussian (μ={mu:.2f}, σ={std:.2f})')
 
-        lh_axes[row, 0].axvline(init_lh, color='r', label=f'init h={init_h:.2f}')
+        lh_axes[row, 0].axvline(init_lh, color='r', label=f'init h={init_lh:.2f}')
         lh_axes[row, 0].axvline(jittered_lh, color='orange', linestyle='--',
-            label=f'jittered h={jittered_h:.2f}')
+            label=f'jittered lh={jittered_h:.2f}')
         lh_axes[row, 0].set_title(f"Cam {k}: init - jittered in logh = {(init_lh-jittered_lh):.2f}")
         lh_axes[row, 0].set_xlabel('logh')
         lh_axes[row, 0].set_ylabel('density')

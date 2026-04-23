@@ -294,18 +294,33 @@ class PositionSolver:
         ant_str = f"{self.ant_pos[0]: 7.2f}, {self.ant_pos[1]: 7.2f}, {self.ant_pos[2]: 7.2f}"
         return ',\n'.join(imgs_str + [ant_str])
 
-    def total_logL(self, theta, n_rays=None, eps=1e-3):
+    # def total_logL(self, theta, n_rays=None, eps=1e-3):
+    #     if n_rays is None:
+    #         n_rays = self.n_rays
+    #     self.set_mcmc_prms(theta)
+    #     logL_rays = 0.0
+    #     for cnt, img in enumerate(self.fit_imgs):
+    #         logL_rays += img.horizon_ray_logL(self.dem, n_rays=n_rays, eps=eps)
+    #     logL_ant = 0
+    #     for img in self.imgs:
+    #         logL_ant += img.ant_logL(self.ant_pos, self.box_size)
+    #     logL = logL_rays + logL_ant 
+    #     return logL
+    
+    def total_logL(self, theta, n_rays=None, eps=1e-3,
+                ant_weight=1.0, disable_ant=False):
+        # add ability to disable this and wieght it to isolate ray likelihood so eps 0.5 returns prior
         if n_rays is None:
             n_rays = self.n_rays
         self.set_mcmc_prms(theta)
         logL_rays = 0.0
-        for cnt, img in enumerate(self.fit_imgs):
+        for img in self.fit_imgs:
             logL_rays += img.horizon_ray_logL(self.dem, n_rays=n_rays, eps=eps)
-        logL_ant = 0
-        for img in self.imgs:
-            logL_ant += img.ant_logL(self.ant_pos, self.box_size)
-        logL = logL_rays + logL_ant 
-        return logL
+        logL_ant = 0.0
+        if not disable_ant:
+            for img in self.imgs:
+                logL_ant += img.ant_logL(self.ant_pos, self.box_size)
+        return logL_rays + ant_weight * logL_ant
 
     def export_jax(self, n_rays=None, eps=1e-3, dtype=dtype_r):
         if n_rays is None:

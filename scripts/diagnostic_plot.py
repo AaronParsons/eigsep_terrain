@@ -580,7 +580,7 @@ def build_argparser():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("nc_file", help="Path to the ArviZ .nc trace file")
+    ap.add_argument("--nc_file", help="Path to the ArviZ .nc trace file")
 
     # plot toggles
     ap.add_argument("--trace",      action="store_true", help="Chain timeseries + marginal KDE")
