@@ -35,6 +35,9 @@ import arviz as az
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
+import glob
+
+from eigsep_terrain.img import HorizonImage
 
 # ── figure style ──────────────────────────────────────────────────────────────
 plt.rcParams.update({
@@ -112,10 +115,8 @@ def _suptitle(fig, meta, plot_name="", extra=""):
     disable_ant  = lk.get("disable_ant", False)
     if disable_ant:
         ant_str = "ant=DISABLED"
-    elif ant_weight != 1.0:
-        ant_str = f"ant_weight={ant_weight}"
     else:
-        ant_str = "ant=ON"
+        ant_str = f"ant_weight={ant_weight}"
     line3_parts = [
         f"eps={lk.get('eps', '?')}",
         f"n_rays={lk.get('n_rays', '?')}",
@@ -201,6 +202,26 @@ def _autoscale_x(ax, samples, plo=0.5, phi=99.5, margin=0.05):
     lo, hi = np.percentile(finite, plo), np.percentile(finite, phi)
     span = hi - lo if hi != lo else 1.0
     ax.set_xlim(lo - margin * span, hi + margin * span)
+
+
+def _terrain_plot(dem, ax=None, xlabel=True, ylabel=True,
+             colorbar=True, cmap='terrain', erng_m=None, nrng_m=None,
+             decimate=1, **kw):
+
+    E, N, U = dem.get_tile(erng_m=erng_m, nrng_m=nrng_m, mesh=False, decimate=decimate)
+    extent = (E[0], E[-1], N[0], N[-1])
+    if ax is None:
+        ax = plt.gca()
+    im = ax.imshow(U, extent=extent, cmap=cmap, origin='lower',
+                   interpolation='nearest', **kw)
+    if colorbar:
+        cb = plt.colorbar(im, ax=ax)
+        cb.set_label('Elevation [m]')
+    if xlabel:
+        ax.set_xlabel('East [m]')
+    if ylabel:
+        ax.set_ylabel('North [m]')
+    return im
 
 
 # ── individual plot functions ─────────────────────────────────────────────────
@@ -674,6 +695,47 @@ def plot_prior_sensitivity(trace, meta, stem, outdir):
     _suptitle(fig, meta, plot_name="Prior sensitivity (z-score & contraction)")
     _save(fig, outdir, "prior_sensitivity")
 
+def plot_canyon_overlay(trace, meta, stem, outdir):
+    fig, ax = plt.subplots()
+
+    CACHE_FILE = 'marjum_dem.npz'
+    dem = DEM(cache_file=CACHE_FILE)
+
+    imgmeta = {
+    '0817': {'ant_px': (2*1366, 2*1221)},
+    '0833': {'ant_px': (1606, 2700)},
+    #'0834': {'ant_px': (1622, 2251)},
+#    'best_prms': ( 1642.45,  1887.80,   1678.94,  1.1787,  1.2417, -0.0310,  2933.66),  #[LOSS= 0.0685]
+    '0860': {'ant_px': (2924, 1945)},
+    }
+
+    files = sorted(glob.glob('/Users/komalkaur/Desktop/eigsep_stuff/hrzn_mapping/imgs/IMG_08*.jpg'))
+    imgs = [HorizonImage(f, px_dist=30) for f in files]
+    imgs = [img for img in imgs if img.key in imgmeta]
+
+    alpha = 0.02
+    _terrain_plot(dem, ax=ax)
+    plt.plot(np.asarray(trace.posterior['ant_e']).flatten(), 
+             np.asarray(trace.posterior['ant_n']).flatten(), 
+             'k.', alpha=alpha, label=f'antenna')
+    colors = ['red', 'blue', 'magenta']
+    for i, img in enumerate(imgs):
+        try:
+            plt.plot(np.asarray(trace.posterior[f'{img.key}_e']).flatten(), 
+                     np.asarray(trace.posterior[f'{img.key}_n']).flatten(), 
+                     '.', alpha=alpha, label=f'img {i}', color=colors[i]);
+        except(KeyError):
+            plt.plot(np.asarray(trace.posterior['e']).flatten(), 
+                     np.asarray(trace.posterior['n']).flatten(), 
+                     '.', alpha=alpha, label=f'img {i}');
+    leg = plt.legend()
+    for lh in leg.legend_handles:
+        lh.set_alpha(1)
+
+    ax.set_title('MCMC steps in the canyon')
+
+    _suptitle(fig, meta, plot_name="Canyon Overlay")
+    _save(fig, outdir, "autocorr")
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
@@ -791,6 +853,11 @@ def main(argv=None):
     if do_all or args.prior_sensitivity:
         print("Plotting: prior_sensitivity")
         plot_prior_sensitivity(trace, meta, stem, outdir)
+        plots_run += 1
+
+    if do_all or args.canyon_overlay:
+        print("Plotting: canyon_overlay")
+        plot_canyon_overlay(trace, meta, stem, outdir)
         plots_run += 1
 
     if plots_run == 0:

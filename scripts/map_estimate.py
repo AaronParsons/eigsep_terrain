@@ -139,6 +139,18 @@ def build_argparser():
     ap.add_argument("--log-h-sigma", type=float, default=1.0,
                     help="log-height prior sigma")
 
+    # Camera position / height corrections (must match eigsep_terrain_pymc.py)
+    ap.add_argument("--img0-e", type=float, default=1734.11)
+    ap.add_argument("--img0-n", type=float, default=2069.00)
+    ap.add_argument("--img1-e", type=float, default=1611.31)
+    ap.add_argument("--img1-n", type=float, default=1849.00)
+    ap.add_argument("--img2-e", type=float, default=1541.90)
+    ap.add_argument("--img2-n", type=float, default=1998.96)
+    ap.add_argument("--set-cam-height", action="store_true", default=True,
+                    help="Override u from DEFAULT_PRMS with DEM + cam_height")
+    ap.add_argument("--cam-height", type=float, default=1.6,
+                    help="Camera height above ground [m] (default: 1.6)")
+
     # Optimizer params
     ap.add_argument("--method", default="Powell",
                     choices=["Powell", "Nelder-Mead", "COBYLA"],
@@ -187,6 +199,7 @@ def main(argv=None):
     print(f"  pos_err     = {args.pos_err} m")
     print(f"  ang_err     = {args.ang_err_deg} deg")
     print(f"  log_h_sigma = {args.log_h_sigma}")
+    print(f"  cam_height  = {args.cam_height}m")
     print(f"  outfile     = {outfile}")
     print()
 
@@ -207,6 +220,29 @@ def main(argv=None):
     fit_imgs, static_imgs = imgs, []
     img_keys = [img.key for img in fit_imgs]
     prms_u = np.asarray(DEFAULT_PRMS, dtype=dtype_r)
+
+    # Always correct e/n so u is computed at the right location
+    prms_u[0]  = args.img0_e;  prms_u[1]  = args.img0_n
+    prms_u[7]  = args.img1_e;  prms_u[8]  = args.img1_n
+    prms_u[14] = args.img2_e;  prms_u[15] = args.img2_n
+
+    # Report and optionally correct camera heights
+    for idx, (e_arg, n_arg, label) in enumerate([
+        (args.img0_e, args.img0_n, "img0"),
+        (args.img1_e, args.img1_n, "img1"),
+        (args.img2_e, args.img2_n, "img2"),
+    ]):
+        u_orig = float(DEFAULT_PRMS[2 + idx * 7])
+        h_orig = u_orig - float(dem.interp_alt(e_arg, n_arg))
+        u_new  = float(dem.interp_alt(e_arg, n_arg)) + args.cam_height
+        print(f"{label}: orig u={u_orig:.2f}  orig h={h_orig:.2f}m  "
+              f"-> new u={u_new:.2f}  new h={args.cam_height:.2f}m")
+
+    if args.set_cam_height:
+        prms_u[2]  = float(dem.interp_alt(args.img0_e, args.img0_n)) + args.cam_height
+        prms_u[9]  = float(dem.interp_alt(args.img1_e, args.img1_n)) + args.cam_height
+        prms_u[16] = float(dem.interp_alt(args.img2_e, args.img2_n)) + args.cam_height
+        print(f"Camera heights set to {args.cam_height}m above terrain.")
 
     _apply_prms_to_dem_and_meta(dem, meta, img_keys, prms_u, len(PRM_ORDER))
 
