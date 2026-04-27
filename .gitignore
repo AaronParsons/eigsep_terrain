@@ -19,3 +19,4 @@ __pycache__/
 *.py[cod]
 *.pyo
 map*.json
+map*/
