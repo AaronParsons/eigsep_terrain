@@ -43,6 +43,88 @@ DEFAULT_PRMS = (
 )
 
 
+
+# ── parameter source modes ────────────────────────────────────────────────────
+# --mode map          : MAP values from --map-file  (default when map-file given)
+# --mode post_mean    : posterior mean from --trace-file
+# --mode post_median  : posterior median from --trace-file
+# --mode post_sample  : single random posterior draw from --trace-file
+# --mode post_last  : last step in posterior from --trace-file
+
+def _load_theta(args, prms_h, param_names):
+    """
+    Load a parameter vector according to args.mode, args.map_file,
+    and args.trace_file.  Returns (theta, param_source_str).
+
+    Rules
+    -----
+    - map-file only            -> mode defaults to "map"
+    - trace-file only          -> mode defaults to "post_mean"
+    - both                     -> mode selects which to use
+    - neither                  -> returns prms_h (DEFAULT_PRMS baseline)
+    """
+    import arviz as _az
+
+    mode = args.mode
+
+    # Auto-default mode when not explicitly set
+    if mode is None:
+        if args.trace_file is not None and args.map_file is None:
+            mode = "post_mean"
+        elif args.map_file is not None:
+            mode = "map"
+        else:
+            mode = "default"
+
+    theta = prms_h.copy()
+
+    if mode == "map":
+        if args.map_file is None:
+            raise ValueError("--mode map requires --map-file")
+        with open(args.map_file) as f:
+            mj = json.load(f)
+        for i, name in enumerate(param_names):
+            if name in mj.get("map_params_h", {}):
+                theta[i] = dtype_r(mj["map_params_h"][name])
+        src = (f"MAP  logL={mj['map_logL']:.1f}  "
+               f"method={mj['method']}  converged={mj['converged']}  "
+               f"seed={mj['seed']}")
+        map_json = mj
+
+    elif mode in ("post_mean", "post_median", "post_sample", "post_last"):
+        if args.trace_file is None:
+            raise ValueError(f"--mode {mode} requires --trace-file")
+        trace = _az.from_netcdf(args.trace_file)
+        for i, name in enumerate(param_names):
+            if name in trace.posterior:
+                vals = trace.posterior[name].values.flatten()
+                if mode == "post_mean":
+                    theta[i] = dtype_r(float(vals.mean()))
+                elif mode == "post_median":
+                    theta[i] = dtype_r(float(np.median(vals)))
+                elif mode == "post_last":
+                    theta[i] = dtype_r(float(vals[-1]))
+                else:  # post_sample
+                    theta[i] = dtype_r(float(
+                        np.random.choice(vals)
+                    ))
+        mode_label = {"post_mean": "posterior mean",
+                      "post_median": "posterior median",
+                      "post_sample": "posterior sample"}[mode]
+        src = f"{mode_label}  ({os.path.basename(args.trace_file)})"
+        map_json = None
+        # try to load map_json from sidecar for provenance
+        if args.map_file is not None:
+            with open(args.map_file) as f:
+                map_json = json.load(f)
+            src += f"  |  MAP seed={map_json['seed']}  logL={map_json['map_logL']:.1f}"
+
+    else:  # default — just prms_h
+        src = "DEFAULT_PRMS (no map-file or trace-file)"
+        map_json = None
+
+    return theta, src, map_json
+
 def _apply_prms(dem, meta, img_keys, prms, prm_len):
     dem["platform"] = prms[-3:].astype(dtype_r)
     off = 0
@@ -92,9 +174,15 @@ def _upsample_sky(model_sky, target_shape, xs, ys):
 def build_argparser():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--map-file",   required=True)
+    ap.add_argument("--map-file",   default=None,
+                    help="Path to map_seed{NNN}.json (optional if --trace-file given)")
     ap.add_argument("--trace-file", default=None,
-                    help="ArviZ .nc trace; uses posterior mean instead of MAP")
+                    help="Path to ArviZ .nc trace file (optional if --map-file given)")
+    ap.add_argument("--mode", default=None,
+                    choices=["map", "post_mean", "post_median", "post_sample", "post_last"],
+                    help="Which parameter estimate to use. Auto-detected if not set: "
+                         "map-file only -> map; trace-file only -> post_mean; "
+                         "both -> map unless overridden.")
     ap.add_argument("--cache-file", default="marjum_dem.npz")
     ap.add_argument("--img-glob",
                     default="/Users/komalkaur/Desktop/eigsep_stuff/hrzn_mapping/imgs/IMG*.jpg")
@@ -117,7 +205,10 @@ def build_argparser():
 def main(argv=None):
     args = build_argparser().parse_args(argv)
 
-    stem   = os.path.splitext(os.path.basename(args.map_file))[0]
+    _src_file = args.map_file or args.trace_file
+    if _src_file is None:
+        raise ValueError("Must provide at least one of --map-file or --trace-file")
+    stem   = os.path.splitext(os.path.basename(_src_file))[0]
     outdir = args.outdir or f"{stem}_horizon_viz"
     os.makedirs(outdir, exist_ok=True)
 
@@ -153,26 +244,7 @@ def main(argv=None):
     ] + ["ant_e", "ant_n", "ant_log_h"]
 
     # ── load params ───────────────────────────────────────────────────────────
-    with open(args.map_file) as f:
-        map_json = json.load(f)
-
-    theta = prms_h.copy()
-    for i, name in enumerate(param_names):
-        if name in map_json["map_params_h"]:
-            theta[i] = dtype_r(map_json["map_params_h"][name])
-
-    if args.trace_file is not None:
-        import arviz as az
-        trace = az.from_netcdf(args.trace_file)
-        for i, name in enumerate(param_names):
-            if name in trace.posterior:
-                theta[i] = dtype_r(float(trace.posterior[name].values.mean()))
-        param_source = f"posterior mean  ({os.path.basename(args.trace_file)})"
-    else:
-        param_source = (f"MAP  logL={map_json['map_logL']:.1f}  "
-                        f"method={map_json['method']}  "
-                        f"converged={map_json['converged']}")
-
+    theta, param_source, map_json = _load_theta(args, prms_h, param_names)
     ps.set_mcmc_prms(theta)
     print(f"Parameters: {param_source}")
 
@@ -205,7 +277,7 @@ def main(argv=None):
         title = (f"Camera {key}  —  Horizon overlay\n"
                  f"{param_source}\n"
                  f"E={img.prms['e']:.1f}  N={img.prms['n']:.1f}  "
-                 f"h={np.exp(map_json['map_params_h'].get(f'{key}_log_h', 0)):.2f}m  "
+                 f"h={np.exp(map_json['map_params_h'].get(f'{key}_log_h', 0)):.2f}m  " if map_json else ""
                  f"θ={img.prms['th']:.4f}  φ={img.prms['ph']:.4f}")
         fig.suptitle(title, fontsize=8, y=1.01)
 
