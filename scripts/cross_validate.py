@@ -143,7 +143,7 @@ def _apply_prms(dem, meta, img_keys, prms, prm_len):
         dem[key] = np.asarray(chunk[:3], dtype=dtype_r)
 
 
-def _eval_logL_on_pixels(img, dem, x_px, y_px, eps=1e-2, dtype=dtype_r):
+def _eval_logL_on_pixels(img, dem, x_px, y_px, eps=1e-2, fine_delta=0.25, dtype=dtype_r):
     """
     Evaluate horizon_ray_logL on a specific fixed set of pixels.
     Returns per-pixel logL contributions (not summed) so we can inspect
@@ -151,7 +151,7 @@ def _eval_logL_on_pixels(img, dem, x_px, y_px, eps=1e-2, dtype=dtype_r):
     """
     psky = img.psky[x_px, y_px].clip(eps, 1 - eps)
     rays = img.get_rays(pixels=(x_px, y_px), dtype=dtype)
-    r    = img.ray_distance(dem, rays, dtype=dtype)
+    r    = img.ray_distance(dem, rays, dtype=dtype, fine_delta=fine_delta)
     model_sky  = np.isnan(r)
     logp_sky   = np.log(psky)
     logp_gnd   = np.log1p(-psky)
@@ -179,6 +179,8 @@ def build_argparser():
     ap.add_argument("--n-rays",     type=int,   default=4000,
                     help="Total horizon pixels to draw (split 50/50 fit/held-out)")
     ap.add_argument("--eps",        type=float, default=1e-2)
+    ap.add_argument("--fine-delta", type=float, default=0.25,
+                    help="Ray trace fine step size [m] (default 0.25).")
     ap.add_argument("--n-prior-samples", type=int, default=50,
                     help="Random prior draws for baseline comparison")
     ap.add_argument("--seed",       type=int,   default=42)
@@ -291,8 +293,8 @@ def main(argv=None):
         x_held, y_held = x_all[held_idx], y_all[held_idx]
 
         # ── MAP logL on each split ─────────────────────────────────────────────
-        pp_fit  = _eval_logL_on_pixels(img, dem, x_fit,  y_fit,  eps=args.eps)
-        pp_held = _eval_logL_on_pixels(img, dem, x_held, y_held, eps=args.eps)
+        pp_fit  = _eval_logL_on_pixels(img, dem, x_fit,  y_fit,  eps=args.eps, fine_delta=args.fine_delta)
+        pp_held = _eval_logL_on_pixels(img, dem, x_held, y_held, eps=args.eps, fine_delta=args.fine_delta)
 
         logL_fit  = float(pp_fit.sum())
         logL_held = float(pp_held.sum())
@@ -310,7 +312,7 @@ def main(argv=None):
             theta_prior = prms_h + rng.normal(0.0, sigmas)
             ps.set_mcmc_prms(theta_prior)
             try:
-                pp = _eval_logL_on_pixels(img, dem, x_held, y_held, eps=args.eps)
+                pp = _eval_logL_on_pixels(img, dem, x_held, y_held, eps=args.eps, fine_delta=args.fine_delta)
                 if np.isfinite(pp.sum()):
                     prior_ppl_held.append(float(pp.mean()))
             except Exception:

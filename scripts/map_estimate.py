@@ -128,6 +128,10 @@ def build_argparser():
     # Likelihood params
     ap.add_argument("--n-rays", type=int,   default=4000)
     ap.add_argument("--eps",    type=float, default=1e-2)
+    ap.add_argument("--fine-delta", type=float, default=0.25,
+                    help="Ray trace fine step size [m] (default 0.25). "
+                         "Should be <= DEM grid spacing. Smaller = "
+                         "more accurate horizons, proportionally slower.")
 
     # Prior sigmas — used to build the log-prior term added to logL
     ap.add_argument("--pos-err",     type=float, default=30.0,
@@ -200,6 +204,7 @@ def main(argv=None):
     print(f"  ang_err     = {args.ang_err_deg} deg")
     print(f"  log_h_sigma = {args.log_h_sigma}")
     print(f"  cam_height  = {args.cam_height}m")
+    print(f"  fine_delta  = {args.fine_delta}m")
     print(f"  outfile     = {outfile}")
     print()
 
@@ -282,6 +287,7 @@ def main(argv=None):
         try:
             logL = float(ps.total_logL(
                 np.asarray(theta, dtype=dtype_r), eps=eps,
+                fine_delta=args.fine_delta,
             ))
         except Exception:
             return np.inf
@@ -414,6 +420,7 @@ def main(argv=None):
             "f_err": args.f_err,
             "log_h_sigma": args.log_h_sigma,
         },
+        "fine_delta": args.fine_delta,
 
         # MAP values in log_h representation — use as MCMC prior centres
         "map_params_h": map_params_h,

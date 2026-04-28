@@ -307,15 +307,15 @@ class PositionSolver:
     #     logL = logL_rays + logL_ant 
     #     return logL
     
-    def total_logL(self, theta, n_rays=None, eps=1e-3,
-                ant_weight=1.0, disable_ant=False):
+    def total_logL(self, theta, n_rays=None, eps=1e-3, ant_weight=1.0,
+               disable_ant=False, fine_delta=0.25):
         # add ability to disable this and wieght it to isolate ray likelihood so eps 0.5 returns prior
         if n_rays is None:
             n_rays = self.n_rays
         self.set_mcmc_prms(theta)
         logL_rays = 0.0
         for img in self.fit_imgs:
-            logL_rays += img.horizon_ray_logL(self.dem, n_rays=n_rays, eps=eps)
+            logL_rays += img.horizon_ray_logL(self.dem, n_rays=n_rays, eps=eps, fine_delta=fine_delta)
         logL_ant = 0.0
         if not disable_ant:
             for img in self.imgs:

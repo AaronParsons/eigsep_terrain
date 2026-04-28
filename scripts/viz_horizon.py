@@ -135,14 +135,14 @@ def _apply_prms(dem, meta, img_keys, prms, prm_len):
         dem[key] = np.asarray(chunk[:3], dtype=dtype_r)
 
 
-def _predicted_sky_grid(img, dem, decimate=8):
+def _predicted_sky_grid(img, dem, decimate=8, fine_delta=0.25):
     """Ray-trace a decimated pixel grid. Returns (row_coords, col_coords, model_sky bool array)."""
     Ny, Nx = img.npix_y, img.npix_x
     xs = np.arange(0, Ny, decimate)
     ys = np.arange(0, Nx, decimate)
     yy, xx = np.meshgrid(ys, xs)
     rays = img.get_rays(pixels=(xx.ravel(), yy.ravel()), dtype=dtype_r)
-    r = img.ray_distance(dem, rays, dtype=dtype_r)
+    r = img.ray_distance(dem, rays, dtype=dtype_r, fine_delta=fine_delta)
     model_sky = np.isnan(r).reshape(xx.shape)
     return xs, ys, model_sky
 
@@ -198,6 +198,8 @@ def build_argparser():
     ap.add_argument("--img2-n", type=float, default=1998.96)
     ap.add_argument("--set-cam-height", action="store_true", default=True)
     ap.add_argument("--cam-height", type=float, default=1.6)
+    ap.add_argument("--fine-delta", type=float, default=0.25,
+                    help="Ray trace fine step size [m] (default 0.25).")
     ap.add_argument("--outdir", default=None)
     return ap
 
@@ -254,7 +256,8 @@ def main(argv=None):
         print(f"\nCamera {key}: ray-tracing {img.npix_y}x{img.npix_x} "
               f"at 1/{args.decimate} resolution...")
 
-        xs, ys, model_sky = _predicted_sky_grid(img, dem, decimate=args.decimate)
+        xs, ys, model_sky = _predicted_sky_grid(img, dem, decimate=args.decimate,
+                                                fine_delta=args.fine_delta)
         hx_full, hy_full  = _horizon_scatter(xs, ys, model_sky)
         sky_up = _upsample_sky(model_sky, (img.npix_y, img.npix_x), xs, ys)
 
@@ -274,11 +277,13 @@ def main(argv=None):
         pct_agree = 100 * (agree_sky | agree_gnd).sum() / img.psky.size
 
         fig, axes = plt.subplots(1, 3, figsize=(21, 7))
+        _h_str = (f"h={np.exp(map_json['map_params_h'].get(f'{key}_log_h', 0)):.2f}m  "
+                  if map_json else "")
         title = (f"Camera {key}  —  Horizon overlay\n"
                  f"{param_source}\n"
                  f"E={img.prms['e']:.1f}  N={img.prms['n']:.1f}  "
-                 f"h={np.exp(map_json['map_params_h'].get(f'{key}_log_h', 0)):.2f}m  " if map_json else ""
-                 f"θ={img.prms['th']:.4f}  φ={img.prms['ph']:.4f}")
+                 + _h_str
+                 + f"θ={img.prms['th']:.4f}  φ={img.prms['ph']:.4f}")
         fig.suptitle(title, fontsize=8, y=1.01)
 
         # Panel 1: raw image

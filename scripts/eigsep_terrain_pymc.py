@@ -84,6 +84,9 @@ def build_argparser() -> argparse.ArgumentParser:
 
     # logL op params
     ap.add_argument("--eps", type=float, default=1e-2)
+    ap.add_argument("--fine-delta", type=float, default=0.25,
+                    help="Ray trace fine step size [m] (default 0.25). "
+                         "Should be <= DEM grid spacing (0.5m).")
 
     # Camera position / height corrections
     ap.add_argument("--img0-e", type=float, default=1734.11)
@@ -266,6 +269,7 @@ def main(argv=None) -> int:
                     eps=args.eps,
                     ant_weight=args.ant_weight,
                     disable_ant=args.disable_ant,
+                    fine_delta=args.fine_delta,
                 ),
                 dtype=dtype_r,
             )
@@ -366,6 +370,7 @@ def main(argv=None) -> int:
             "n_rays":      args.n_rays,
             "ant_weight":  args.ant_weight,
             "disable_ant": args.disable_ant,
+            "fine_delta":  args.fine_delta,
         },
         "image": {
             "px_dist":        args.px_dist,
