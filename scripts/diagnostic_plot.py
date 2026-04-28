@@ -38,6 +38,7 @@ import numpy as np
 import glob
 
 from eigsep_terrain.img import HorizonImage
+from eigsep_terrain.marjum_dem import MarjumDEM as DEM
 
 # ── figure style ──────────────────────────────────────────────────────────────
 plt.rcParams.update({
@@ -732,10 +733,12 @@ def plot_canyon_overlay(trace, meta, stem, outdir):
     for lh in leg.legend_handles:
         lh.set_alpha(1)
 
+    ax.set_ylim(1600, 2300)
+    ax.set_xlim(1400, 2100)
     ax.set_title('MCMC steps in the canyon')
 
     _suptitle(fig, meta, plot_name="Canyon Overlay")
-    _save(fig, outdir, "autocorr")
+    _save(fig, outdir, "canyon_overlay")
 
 # ── main ──────────────────────────────────────────────────────────────────────
 

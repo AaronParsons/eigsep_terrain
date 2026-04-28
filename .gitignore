@@ -20,3 +20,4 @@ __pycache__/
 *.pyo
 map*.json
 map*/
+trace*/
