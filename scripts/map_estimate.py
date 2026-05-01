@@ -24,6 +24,8 @@ import glob
 import json
 import os
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import os as _os
 
 import numpy as np
 from scipy.optimize import minimize
@@ -130,8 +132,7 @@ def build_argparser():
     ap.add_argument("--eps",    type=float, default=1e-2)
     ap.add_argument("--fine-delta", type=float, default=0.25,
                     help="Ray trace fine step size [m] (default 0.25). "
-                         "Should be <= DEM grid spacing. Smaller = "
-                         "more accurate horizons, proportionally slower.")
+                         "Should be <= DEM grid spacing (0.5m).")
 
     # Prior sigmas — used to build the log-prior term added to logL
     ap.add_argument("--pos-err",     type=float, default=30.0,
@@ -166,6 +167,9 @@ def build_argparser():
     ap.add_argument("--jitter-scaling", type=float, default=0.0,
                     help="Jitter init by this fraction of prior sigmas "
                          "(0 = start from DEFAULT_PRMS exactly)")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="Parallel worker processes (default: min(n_restarts, cpu_count)). "
+                         "Set to 1 to disable parallelism.")
     ap.add_argument("--n-restarts", type=int, default=1,
                     help="Number of random restarts; best result is kept "
                          "(default: 1, use 3-5 to check for multiple modes)")
@@ -180,6 +184,82 @@ def build_argparser():
     ap.add_argument("--outfile", default=None,
                     help="Output JSON path (default: map_seed{NNN}.json)")
     return ap
+
+
+
+def _run_one_restart(ra):
+    """
+    Top-level picklable worker: rebuilds full setup in subprocess and runs
+    one Powell restart. ra is a plain dict of serialisable config values.
+    """
+    import numpy as _np
+    import time as _time
+    from scipy.optimize import minimize as _minimize
+    from eigsep_terrain.marjum_dem import MarjumDEM as _DEM
+    from eigsep_terrain.img import (HorizonImage as _HI,
+                                    PositionSolver as _PS,
+                                    PRM_ORDER as _PO, dtype_r as _dr)
+
+    rng_w  = _np.random.default_rng(ra["seed_w"])
+    dem_w  = _DEM(cache_file=ra["cache_file"])
+    meta_w = {k: dict(v) for k, v in ra["default_meta"].items()}
+    imgs_w = [_HI(f, meta_w, px_smooth=ra["px_smooth"], px_dist=ra["px_dist"])
+              for f in ra["files"]]
+    imgs_w = [img for img in imgs_w if img.key in meta_w]
+
+    prms_u_w = _np.asarray(ra["prms_u"], dtype=_dr)
+    dem_w["platform"] = prms_u_w[-3:].astype(_dr)
+    off = 0
+    for key in ra["img_keys"]:
+        chunk = prms_u_w[off: off + ra["prm_len"]]
+        off  += ra["prm_len"]
+        meta_w[key]["prms"] = tuple(float(x) for x in chunk)
+        dem_w[key] = _np.asarray(chunk[:3], dtype=_dr)
+
+    ps_w = _PS(dem_w["platform"], imgs_w, [], ra["n_rays"], dem_w,
+               box_size=ra["box_size"])
+    prms_h_w = ps_w.prms_u_to_h(prms_u_w)
+    ps_w.set_mcmc_prms(prms_h_w)
+    ps_w.set_mcmc_sigmas(pos_err=ra["pos_err"], ang_err=ra["ang_err"],
+                         f_err=ra["f_err"], log_h_sigma=ra["log_h_sigma"])
+    for img_w in imgs_w:
+        img_w.choose_pixels(N=ra["n_rays"], reset=True)
+
+    eps_w    = _dr(ra["eps"])
+    sigmas_w = _np.asarray(ps_w.sigmas, dtype=_np.float64)
+    prms_h_f = prms_h_w.astype(_np.float64)
+
+    def _nlp(theta):
+        try:
+            logL = float(ps_w.total_logL(
+                _np.asarray(theta, dtype=_dr), eps=eps_w,
+                fine_delta=ra["fine_delta"]))
+        except Exception:
+            return _np.inf
+        if not _np.isfinite(logL):
+            return _np.inf
+        lp = -0.5 * _np.sum(((theta - prms_h_f) / sigmas_w) ** 2)
+        return -(logL + lp)
+
+    idx = ra["restart_idx"]
+    if ra["jitter_scaling"] > 0 or idx > 0:
+        scale  = max(ra["jitter_scaling"], 0.3) if idx > 0 else ra["jitter_scaling"]
+        x0     = prms_h_f + rng_w.normal(0.0, sigmas_w * scale)
+    else:
+        x0 = prms_h_f.copy()
+
+    init_logL = -_nlp(x0)
+    t0     = _time.time()
+    result = _minimize(_nlp, x0.astype(_np.float64), method=ra["method"],
+                       options={"maxiter": ra["maxiter"],
+                                "ftol":    ra["ftol"], "disp": False})
+    elapsed   = _time.time() - t0
+    map_logL  = -_nlp(result.x)
+
+    return {"restart_idx": idx, "result": result,
+            "init_logL": init_logL, "map_logL": map_logL,
+            "elapsed": elapsed, "nfev": result.nfev,
+            "success": result.success, "message": result.message}
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -298,45 +378,65 @@ def main(argv=None):
         log_prior = -0.5 * np.sum(((theta - prms_h) / sigmas) ** 2)
         return -(logL + log_prior)
 
-    # ── run optimizer (with optional restarts) ────────────────────────────────
+    # ── run optimizer (parallel restarts) ────────────────────────────────────
+    n_workers = args.workers if args.workers is not None else min(
+        args.n_restarts, _os.cpu_count() or 1
+    )
+    print(f"  Running {args.n_restarts} restarts across {n_workers} workers...")
+
+    restart_seeds = [int(rng.integers(0, 2**31)) for _ in range(args.n_restarts)]
+    cfgs = [
+        dict(restart_idx=i, seed_w=restart_seeds[i],
+             cache_file=args.cache_file, default_meta=DEFAULT_META,
+             files=files, img_keys=img_keys,
+             prms_u=prms_u.tolist(), prm_len=len(PRM_ORDER),
+             box_size=BOX_SIZE, n_rays=args.n_rays,
+             px_smooth=args.px_smooth, px_dist=args.px_dist,
+             pos_err=args.pos_err, ang_err=float(np.deg2rad(args.ang_err_deg)),
+             f_err=args.f_err, log_h_sigma=args.log_h_sigma,
+             eps=float(args.eps), fine_delta=float(args.fine_delta),
+             jitter_scaling=args.jitter_scaling, method=args.method,
+             maxiter=args.maxiter, ftol=args.ftol)
+        for i in range(args.n_restarts)
+    ]
+
     best_result: OptimizeResult | None = None
-    best_val = np.inf
+    best_val   = np.inf
+    total_nfev = 0
 
-    for restart in range(args.n_restarts):
-        if args.jitter_scaling > 0 or restart > 0:
-            # Always jitter on restarts even if jitter_scaling=0
-            scale = max(args.jitter_scaling, 0.3) if restart > 0 else args.jitter_scaling
-            jitter = rng.normal(0.0, sigmas * scale)
-            x0 = prms_h + jitter
-        else:
-            x0 = prms_h.copy()
+    def _report(out):
+        print(f"  Restart {out['restart_idx']+1}/{args.n_restarts}  "
+              f"init_logL={out['init_logL']:.2f}  "
+              f"converged={out['success']}  nfev={out['nfev']}  "
+              f"map_logL={out['map_logL']:.2f}  time={out['elapsed']:.1f}s",
+              flush=True)
+        if not out["success"]:
+            print(f"    message: {out['message']}")
 
-        print(f"  Restart {restart + 1}/{args.n_restarts}  "
-              f"(init logL = {-neg_log_posterior(x0):.2f})")
-
-        t0 = time.time()
-        result = minimize(
-            neg_log_posterior,
-            x0=x0.astype(np.float64),
-            method=args.method,
-            options={"maxiter": args.maxiter, "ftol": args.ftol, "disp": False},
-        )
-        elapsed = time.time() - t0
-
-        map_logL = -neg_log_posterior(result.x)
-        print(f"    converged={result.success}  "
-              f"nfev={result.nfev}  "
-              f"map_logL={map_logL:.2f}  "
-              f"time={elapsed:.1f}s")
-        if not result.success:
-            print(f"    message: {result.message}")
-
-        if result.fun < best_val:
-            best_val = result.fun
-            best_result = result
+    if n_workers == 1:
+        for cfg in cfgs:
+            out = _run_one_restart(cfg)
+            total_nfev += out["nfev"]
+            _report(out)
+            if out["result"].fun < best_val:
+                best_val, best_result = out["result"].fun, out["result"]
+    else:
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            futs = {pool.submit(_run_one_restart, cfg): cfg["restart_idx"]
+                    for cfg in cfgs}
+            for fut in as_completed(futs):
+                try:
+                    out = fut.result()
+                except Exception as exc:
+                    print(f"  Restart {futs[fut]+1} FAILED: {exc}", flush=True)
+                    continue
+                total_nfev += out["nfev"]
+                _report(out)
+                if out["result"].fun < best_val:
+                    best_val, best_result = out["result"].fun, out["result"]
 
     print(f"\n  Best MAP logL = {-best_val:.2f}  "
-          f"(total evals across restarts: {n_evals[0]})")
+          f"(total evals across restarts: {total_nfev})")
 
     map_theta = best_result.x
 
@@ -414,13 +514,13 @@ def main(argv=None):
         "img_keys": img_keys,
 
         # Prior used during optimization — MCMC should use same values
+        "fine_delta": args.fine_delta,
         "priors": {
             "pos_err": args.pos_err,
             "ang_err_deg": args.ang_err_deg,
             "f_err": args.f_err,
             "log_h_sigma": args.log_h_sigma,
         },
-        "fine_delta": args.fine_delta,
 
         # MAP values in log_h representation — use as MCMC prior centres
         "map_params_h": map_params_h,

@@ -1,5 +1,4 @@
 '''Utility functions for calculating distance and azimuth angles.'''
-
 import numpy as np
 from scipy.constants import c as C
 import cv2
@@ -214,20 +213,6 @@ def horizon_angle_to_distance(angles, alt):
     a visibility distance (m) accounting for earth curvature.'''
     th3 = np.arcsin(R_earth * np.sin(np.pi/2 + angles) / (R_earth + alt))
     return R_earth * (np.pi/2 - angles - th3)
-
-def conductivity_from_resistivity(resistivity_ohm_m):
-    '''Return the conductivity of a material given resistivity [Ohm m].'''
-    return 1 / (resistivity_ohm_m * 1.113e-12 * 100)
-
-def permittivity_from_conductivity(conductivity, freqs):
-    '''Return the electromagnetic permittivity given a conductivity and a frequency [Hz].'''
-    omega = 2 * np.pi * freqs  # Hz
-    eta = np.sqrt(1 + 1j * 4 * np.pi * conductivity / omega)
-    return eta
-
-def reflection_coefficient(eta, eta0=1):
-    '''Return the reflection coefficient crossing from eta0 to eta [permittivity].'''
-    return np.abs((eta0 - eta) / (eta0 + eta))**2
 
 def are_points_in_polygon(vertices, points):
     """Determine if multiple points are inside a polygon using ray-casting algorithm.

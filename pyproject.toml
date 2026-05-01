@@ -6,17 +6,30 @@ license = "MIT"
 authors = [{ name = "Aaron Parsons" }]
 readme = "README.md"
 dependencies = [
-  "numpy",
-  "pymc",
-  "arviz",
-  "pytensor",
+    "numpy",
+    "scipy",
+    "opencv-python",
+    "xmltodict",
+    "Pillow",
+    "pyuvdata",
+    "tqdm",
+    "linsolve",
+    "jax",
+    "healpy",
 ]
 
 [project.optional-dependencies]
+img = [
+    "torch",
+    "transformers",
+    "pymc",
+    "arviz",
+    "pytensor",
+]
 numba = ["numba"]
 
 [tool.setuptools]
-script-files = ["scripts/eigsep_terrain_pymc.py", "scripts/diagnostic_plot.py", "scripts/mcmc_sanity_check.py", "scripts/cross_validate.py", "scripts/eigsep_terrain_plot_nc.py", "scripts/map_estimate.py", "scripts/test_prior.py", "scripts/viz_horizon.py"]
+script-files = ["scripts/eigsep_terrain_pymc.py", "scripts/diagnostic_plot.py", "scripts/mcmc_sanity_check.py", "scripts/cross_validate.py", "scripts/eigsep_terrain_plot_nc.py", "scripts/map_estimate.py", "scripts/test_prior.py", "scripts/viz_horizon.py", "scripts/eval_trace_logl.py"]
 include-package-data = true
 
 [tool.black]

@@ -114,13 +114,22 @@ class HorizonImage:
             self._px_choice = (x[inds], y[inds])
         return self._px_choice
 
-    def ray_distance(self, dem, rays, dtype=dtype_r):
+    # def ray_distance(self, dem, rays, dtype=dtype_r):
+    #     rays_2d = rays.reshape(rays.shape[0], -1)
+    #     (E, N), U = dem.get_en(), dem.data
+    #     start_point = np.array([self.prms[k] for k in 'enu'], dtype=dtype)
+    #     r = ray_distance_coarse_to_fine_numba(E, N, U, start_point, rays_2d)
+    #     r.shape = rays.shape[1:]
+    #     return r
+    
+    def ray_distance(self, dem, rays, dtype=dtype_r, fine_delta=0.25):
         rays_2d = rays.reshape(rays.shape[0], -1)
         (E, N), U = dem.get_en(), dem.data
         start_point = np.array([self.prms[k] for k in 'enu'], dtype=dtype)
-        r = ray_distance_coarse_to_fine_numba(E, N, U, start_point, rays_2d)
+        r = ray_distance_coarse_to_fine_numba(E, N, U, start_point, rays_2d,
+                                            fine_delta=fine_delta)
         r.shape = rays.shape[1:]
-        return r
+        return r    
 
     def gen_horizon_mask(self, px_dist=None):
         if px_dist is None:
@@ -142,7 +151,7 @@ class HorizonImage:
             ant_px=ant_px,
         )
         
-    def horizon_ray_logL(self, dem, n_rays=1000, dtype=dtype_r, eps=1e-3):
+    def horizon_ray_logL(self, dem, n_rays=1000, dtype=dtype_r, eps=1e-3, fine_delta=0.25):
         x_px, y_px = self.choose_pixels(N=n_rays)
         # Per-pixel probability that the pixel is sky
         psky = self.psky[x_px, y_px].clip(eps, 1 - eps) # Avoid log(0)
@@ -150,7 +159,8 @@ class HorizonImage:
         # Evaluate your geometric horizon model (binary)
         rays = self.get_rays(pixels=(x_px, y_px), dtype=dtype)
         # print(f'DEBUG: get rays returns {rays}')
-        r = self.ray_distance(dem, rays, dtype=dtype)
+        # r = self.ray_distance(dem, rays, dtype=dtype)
+        r = self.ray_distance(dem, rays, dtype=dtype, fine_delta=fine_delta)
         # print(f'DEBUG: ray distance on get rays returns {r}')
         model_sky = np.isnan(r)  # True => model predicts sky
         # print(f'DEBUG: model_sky is {model_sky}. if True, model predicts sky')
