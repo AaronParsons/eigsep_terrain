@@ -33,7 +33,7 @@ DEFAULT_META = {
 
 DEFAULT_PRMS = (
     1734.11, 2069.00, 1760.97, 1.4706, 3.6932, -0.0493, 9830.11,
-    1611.31, 1849.00, 1659.78, 1.2053, 1.2414, -0.0244, 5081.08,
+    1611.31, 1849.00, 1661, 1.2053, 1.2414, -0.0244, 5081.08,
     1541.90, 1998.96, 1765.06, 1.5412, 0.6147, 0.1585, 2328.64,
     1651.83, 2024.17, 1781.46,
 )
@@ -95,7 +95,7 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--img1-n", type=float, default=1849.00)
     ap.add_argument("--img2-e", type=float, default=1541.90)
     ap.add_argument("--img2-n", type=float, default=1998.96)
-    ap.add_argument("--set-cam-height", action="store_true", default=True,
+    ap.add_argument("--set-cam-height", action="store_true", default=False,
                     help="Override u from DEFAULT_PRMS with DEM + cam_height")
     ap.add_argument("--cam-height", type=float, default=1.6,
                     help="Camera height above ground [m] (default: 1.6)")

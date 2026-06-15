@@ -7,9 +7,11 @@ eigsep_terrain.egg-info
 build/
 notebooks/marjum_dem.npz
 *marjum_dem.npz
+*marjum_*.npz
 notebooks/old_traces/
 **__pycache__/
 notebooks/img_seg*.npz
+notebooks/IMG*.jpg
 img_seg*.npz
 trace_seed*.nc
 trace_seed*_meta.json
