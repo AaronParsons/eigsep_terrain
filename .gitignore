@@ -26,3 +26,14 @@ map*.json
 map*/
 trace*/
 *_dem_profiles
+# toy_problem.py / toy_plot.py outputs
+toy_true_prms.json
+toy_synth_cam*.npz
+toy_trace.nc
+toy_trace_comparison.json
+toy_overview.png
+toy_posterior.png
+toy_marginals.png
+# eigsep_terrain_pymc.py outputs
+trace_seed*.nc
+trace_seed*_meta.json

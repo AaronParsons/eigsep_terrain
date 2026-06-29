@@ -29,7 +29,7 @@ img = [
 numba = ["numba"]
 
 [tool.setuptools]
-script-files = ["scripts/eigsep_terrain_pymc.py", "scripts/diagnostic_plot.py", "scripts/mcmc_sanity_check.py", "scripts/cross_validate.py", "scripts/eigsep_terrain_plot_nc.py", "scripts/map_estimate.py", "scripts/test_prior.py", "scripts/viz_horizon.py", "scripts/eval_trace_logl.py", "scripts/viz_dem_profile.py"]
+script-files = ["scripts/eigsep_terrain_pymc.py", "scripts/diagnostic_plot.py", "scripts/mcmc_sanity_check.py", "scripts/cross_validate.py", "scripts/eigsep_terrain_plot_nc.py", "scripts/map_estimate.py", "scripts/test_prior.py", "scripts/viz_horizon.py", "scripts/eval_trace_logl.py", "scripts/viz_dem_profile.py", "scripts/eigsep_terrain_smc.py", "scripts/toy_problem.py", "scripts/toy_plot.py"]
 include-package-data = true
 
 [tool.black]
