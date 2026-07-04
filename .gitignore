@@ -37,3 +37,7 @@ toy_marginals.png
 # eigsep_terrain_pymc.py outputs
 trace_seed*.nc
 trace_seed*_meta.json
+trace_img*_seed*.nc
+trace_img*_seed*_meta.json
+plots_seed*/
+plots_manual/

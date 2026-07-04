@@ -33,7 +33,7 @@ DEFAULT_META = {
 
 DEFAULT_PRMS = (
     1734.11, 2069.00, 1760.97, 1.4706, 3.6932, -0.0493, 9830.11,
-    1611.31, 1849.00, 1661, 1.2053, 1.2414, -0.0244, 5081.08,
+    1611.31, 1849.00, 1659.78, 1.2053, 1.2414, -0.0244, 5081.08,
     1541.90, 1998.96, 1765.06, 1.5412, 0.6147, 0.1585, 2328.64,
     1651.83, 2024.17, 1781.46,
 )
@@ -70,6 +70,9 @@ def build_argparser() -> argparse.ArgumentParser:
                     default="/Users/komalkaur/Desktop/eigsep_stuff/hrzn_mapping/imgs/IMG*.jpg")
     ap.add_argument("--seed", type=int, default=None,
                     help="Defaults to random [0,999]")
+    ap.add_argument("--no-fit-imgs", action="store_true",
+                    help="Don't fit image params; treat all images as static "
+                         "(only antenna e/n/log_h are sampled).")
 
     # HorizonImage params
     ap.add_argument("--px-dist",   type=int, default=30)
@@ -95,7 +98,7 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--img1-n", type=float, default=1849.00)
     ap.add_argument("--img2-e", type=float, default=1541.90)
     ap.add_argument("--img2-n", type=float, default=1998.96)
-    ap.add_argument("--set-cam-height", action="store_true", default=False,
+    ap.add_argument("--set-cam-height", action="store_true", default=True,
                     help="Override u from DEFAULT_PRMS with DEM + cam_height")
     ap.add_argument("--cam-height", type=float, default=1.6,
                     help="Camera height above ground [m] (default: 1.6)")
@@ -161,8 +164,12 @@ def main(argv=None) -> int:
     if not imgs:
         raise RuntimeError("No images matched keys in meta after loading HorizonImage objects.")
 
-    fit_imgs, static_imgs = imgs, []
+    if args.no_fit_imgs:
+        fit_imgs, static_imgs = [], imgs
+    else:
+        fit_imgs, static_imgs = imgs, []
     img_keys = [img.key for img in fit_imgs]
+    all_img_keys = [img.key for img in imgs]
 
     # ── build prms_u ──────────────────────────────────────────────────────────
     prms_u = np.asarray(DEFAULT_PRMS, dtype=dtype_r)
@@ -193,10 +200,13 @@ def main(argv=None) -> int:
     _apply_prms_to_dem_and_meta(
         dem=dem,
         meta=meta,
-        img_keys_in_fit_order=img_keys,
+        img_keys_in_fit_order=all_img_keys,
         prms=prms_u,
         prm_len=len(PRM_ORDER),
     )
+
+    for img in static_imgs:
+        img.set_prms(meta[img.key]["prms"])
 
     # ── build solver ──────────────────────────────────────────────────────────
     ps = PositionSolver(
@@ -232,14 +242,21 @@ def main(argv=None) -> int:
         _param_names = _map["param_names"]
         _map_h       = _map["map_params_h"]
 
-        # Override prms_h with MAP values as new prior centres
-        for i, name in enumerate(_param_names):
-            if name in _map_h:
-                prms_h[i] = dtype_r(_map_h[name])
-        ps.set_mcmc_prms(prms_h)
+        if args.no_fit_imgs:
+            print("  --no-fit-imgs set: ignoring image entries in MAP file, "
+                  "only ant_e/ant_n/ant_log_h would apply (not overridden here; "
+                  "ant prior centre comes from --img*-e/-n/--cam-height instead).")
+        else:
+            # Override prms_h with MAP values as new prior centres
+            for i, name in enumerate(_param_names):
+                if name in _map_h:
+                    prms_h[i] = dtype_r(_map_h[name])
+            ps.set_mcmc_prms(prms_h)
 
         # Override sigmas with Hessian stds where available and finite
-        if _map.get("hess_stds") is not None:
+        if args.no_fit_imgs:
+            pass
+        elif _map.get("hess_stds") is not None:
             _hess      = _map["hess_stds"]
             new_sigmas = list(ps.sigmas)
             for i, name in enumerate(_param_names):
@@ -281,13 +298,14 @@ def main(argv=None) -> int:
         mcmc_prms = ps.get_mcmc_prms()
 
         rng_pm = np.random.default_rng(seed)
+        center = np.asarray(ps.eval_cur_prms(), dtype=dtype_r)  # len == len(mcmc_prms)
 
         initvals = []
         for c in range(args.chains):
             jitter   = rng_pm.normal(0.0,
                                      np.asarray(ps.sigmas) * args.jitter_scaling,
-                                     size=prms_h.size)
-            jittered = prms_h + jitter
+                                     size=center.size)
+            jittered = center + jitter
             ps.set_mcmc_prms(jittered)
             start_c  = ps.eval_cur_prms()
             initvals.append({p.name: v for p, v in zip(mcmc_prms, start_c)})
@@ -333,7 +351,7 @@ def main(argv=None) -> int:
         param_summary[name] = {
             "mean":           float(arr.mean()),
             "std":            float(arr.std()),
-            "prior_mu":       float(prms_h[i]),
+            "prior_mu":       float(center[i]),
             "prior_sigma":    prior_sigma,
             "effective_step": float(tuned_scaling * prior_sigma),
         }
