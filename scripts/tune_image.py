@@ -14,7 +14,7 @@ import os
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider, Button
+from matplotlib.widgets import Slider, Button, TextBox
 
 from eigsep_terrain.marjum_dem import MarjumDEM as DEM
 from eigsep_terrain.img import HorizonImage, dtype_r
@@ -102,10 +102,16 @@ def main(argv=None):
         fig.canvas.draw_idle()
 
     sliders = {}
+    reset_btns = {}
+    textboxes = {}
     for i, (name, (lo, hi)) in enumerate(SLIDER_RANGES.items()):
-        s_ax = plt.axes([0.15, 0.35 - i * 0.045, 0.7, 0.03])
+        s_ax = plt.axes([0.13, 0.35 - i * 0.045, 0.55, 0.03])
         s0 = start[name]
         sliders[name] = Slider(s_ax, name, s0 + lo, s0 + hi, valinit=s0)
+        t_ax = plt.axes([0.71, 0.35 - i * 0.045, 0.08, 0.03])
+        textboxes[name] = TextBox(t_ax, "", initial=f"{s0:.4f}")
+        r_ax = plt.axes([0.80, 0.35 - i * 0.045, 0.06, 0.03])
+        reset_btns[name] = Button(r_ax, "reset")
 
     def on_change(_):
         prms = {name: s.val for name, s in sliders.items()}
@@ -117,10 +123,44 @@ def main(argv=None):
                                 for k in ["e", "n", "u", "th", "ph", "ti", "f"]),
               f" logL={logL:.2f}")
 
-    for s in sliders.values():
-        s.on_changed(on_change)
+    _updating = {"flag": False}
 
-    reset_ax = plt.axes([0.85, 0.35, 0.1, 0.04])
+    def on_slider_change(name):
+        def cb(val):
+            if _updating["flag"]:
+                return
+            _updating["flag"] = True
+            textboxes[name].set_val(f"{val:.4f}")
+            _updating["flag"] = False
+            on_change(val)
+        return cb
+
+    for name, s in sliders.items():
+        s.on_changed(on_slider_change(name))
+
+    def on_text_submit(name):
+        def cb(text):
+            if _updating["flag"]:
+                return
+            try:
+                v = float(text)
+            except ValueError:
+                return
+            v = min(max(v, sliders[name].valmin), sliders[name].valmax)
+            _updating["flag"] = True
+            sliders[name].set_val(v)
+            _updating["flag"] = False
+            textboxes[name].set_val(f"{v:.4f}")
+            on_change(v)
+        return cb
+
+    for name, t in textboxes.items():
+        t.on_submit(on_text_submit(name))
+
+    for name, b in reset_btns.items():
+        b.on_clicked(lambda event, n=name: sliders[n].reset())
+
+    reset_ax = plt.axes([0.85, 0.90, 0.1, 0.04])
     reset_btn = Button(reset_ax, "Reset")
 
     def on_reset(_):
@@ -130,7 +170,7 @@ def main(argv=None):
     reset_btn.on_clicked(on_reset)
 
     xlim0, ylim0 = ax.get_xlim(), ax.get_ylim()
-    reset_zoom_ax = plt.axes([0.85, 0.30, 0.1, 0.04])
+    reset_zoom_ax = plt.axes([0.85, 0.85, 0.1, 0.04])
     reset_zoom_btn = Button(reset_zoom_ax, "Reset zoom")
 
     def on_reset_zoom(_):
@@ -139,6 +179,24 @@ def main(argv=None):
         fig.canvas.draw_idle()
 
     reset_zoom_btn.on_clicked(on_reset_zoom)
+
+    active = {"name": None}
+    for name, s in sliders.items():
+        s.ax.figure.canvas.mpl_connect("button_press_event",
+            lambda event, n=name, a=s.ax: active.__setitem__("name", n) if event.inaxes == a else None)
+
+    def on_key(event):
+        n = active["name"]
+        if n is None:
+            return
+        s = sliders[n]
+        step = (s.valmax - s.valmin) / 100
+        if event.key == "right":
+            s.set_val(min(s.val + step, s.valmax))
+        elif event.key == "left":
+            s.set_val(max(s.val - step, s.valmin))
+
+    fig.canvas.mpl_connect("key_press_event", on_key)
 
     def on_scroll(event):
         if event.inaxes != ax or event.xdata is None:
