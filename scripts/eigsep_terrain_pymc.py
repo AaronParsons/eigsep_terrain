@@ -333,11 +333,34 @@ def main(argv=None) -> int:
         )
 
     # ── save trace ────────────────────────────────────────────────────────────
+    param_names = [p.name for p in mcmc_prms]
+
+    # ── posterior-mean total logL (rays over ALL images incl. static ones,
+    #    since total_logL's ray loop only covers fit_imgs) ───────────────────
+    theta_h_mean = np.array([trace.posterior[name].values.mean()
+                             for name in param_names], dtype=dtype_r)
+    ps.set_mcmc_prms(theta_h_mean)  # sets fit_imgs prms + ps.ant_pos
+    logL_rays_by_img = {
+        img.key: float(img.horizon_ray_logL(
+            dem, n_rays=args.n_rays, eps=args.eps, fine_delta=args.fine_delta
+        ))
+        for img in imgs
+    }
+    logL_rays = sum(logL_rays_by_img.values())
+    if args.disable_ant:
+        logL_ant = 0.0
+    else:
+        logL_ant = sum(
+            float(img.ant_logL(ps.ant_pos, BOX_SIZE)) for img in ps.imgs
+        )
+    logL_total = logL_rays + args.ant_weight * logL_ant
+    print(f"\nPosterior-mean logL: rays={logL_rays:.2f}  "
+          f"ant={logL_ant:.2f}  total={logL_total:.2f}")
+
     az.to_netcdf(trace, outfile)
 
     # ── summary stats ─────────────────────────────────────────────────────────
     accepted = float(trace.sample_stats.accepted.mean())
-    param_names = [p.name for p in mcmc_prms]
 
     try:
         tuned_scaling = float(step.scaling)
@@ -398,6 +421,12 @@ def main(argv=None) -> int:
             "set_cam_height": args.set_cam_height,
         },
         "param_summary": param_summary,
+        "posterior_mean_logL": {
+            "rays_by_img": logL_rays_by_img,
+            "rays_total":  logL_rays,
+            "ant":         logL_ant,
+            "total":       logL_total,
+        },
     }
 
     with open(metafile, "w") as f:
@@ -407,6 +436,8 @@ def main(argv=None) -> int:
     print(f"\n{'='*50}")
     print(f"Accepted step fraction = {accepted:.3f}")
     print(f"Tuned scaling          = {tuned_scaling:.6f}")
+    print(f"Posterior-mean logL    = {logL_total:.2f} "
+          f"(rays={logL_rays:.2f}, ant={logL_ant:.2f})")
     print(f"Trace written to:        {outfile}")
     print(f"Metadata written to:     {metafile}")
     print(f"{'='*50}")
