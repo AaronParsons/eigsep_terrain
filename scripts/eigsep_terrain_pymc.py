@@ -25,6 +25,7 @@ from eigsep_terrain.img import HorizonImage, PositionSolver, PRM_ORDER, dtype_r
 
 BOX_SIZE = 0.3  # m
 
+# Fallback (used only if --meta-file is not given) — original 3-image deployment.
 DEFAULT_META = {
     "0817": {"ant_px": (2 * 1366, 2 * 1221)},
     "0833": {"ant_px": (1606, 2700)},
@@ -37,6 +38,41 @@ DEFAULT_PRMS = (
     1541.90, 1998.96, 1765.06, 1.5412, 0.6147, 0.1585, 2328.64,
     1651.83, 2024.17, 1781.46,
 )
+
+
+def load_meta_file(path: str):
+    """Load a JSON meta file describing an arbitrary number of images.
+
+    Expected format:
+    {
+      "images": {
+        "<key>": {"ant_px": [x, y], "e":.., "n":.., "u":.., "th":.., "ph":.., "ti":.., "f":..},
+        ...
+      },
+      "platform": [e, n, u]   # antenna prior position, optional
+    }
+
+    Returns (meta, prms, platform) where:
+      meta   : {key: {"ant_px": (x, y)}}  (extra fields ignored downstream)
+      prms   : flat np.array of len(images)*len(PRM_ORDER) in file/img_keys order
+      platform: np.array of 3 platform (antenna) values
+    """
+    with open(path) as f:
+        raw = json.load(f)
+
+    images = raw["images"]
+    keys = list(images.keys())
+
+    meta = {k: {"ant_px": tuple(images[k]["ant_px"])} for k in keys}
+
+    prms = []
+    for k in keys:
+        entry = images[k]
+        prms.extend(float(entry[p]) for p in PRM_ORDER)
+
+    platform = raw.get("platform", [0.0, 0.0, 0.0])
+
+    return meta, keys, np.asarray(prms, dtype=dtype_r), np.asarray(platform, dtype=dtype_r)
 
 
 def _apply_prms_to_dem_and_meta(
@@ -70,9 +106,11 @@ def build_argparser() -> argparse.ArgumentParser:
                     default="/Users/komalkaur/Desktop/eigsep_stuff/hrzn_mapping/imgs/IMG*.jpg")
     ap.add_argument("--seed", type=int, default=None,
                     help="Defaults to random [0,999]")
-    ap.add_argument("--no-fit-imgs", action="store_true",
-                    help="Don't fit image params; treat all images as static "
-                         "(only antenna e/n/log_h are sampled).")
+    ap.add_argument("--meta-file", default=None,
+                    help="JSON file describing an arbitrary number of images "
+                         "(key, ant_px, e/n/u/th/ph/ti/f, platform prior). "
+                         "If omitted, falls back to the hardcoded 3-image "
+                         "DEFAULT_META/DEFAULT_PRMS.")
 
     # HorizonImage params
     ap.add_argument("--px-dist",   type=int, default=30)
@@ -91,13 +129,8 @@ def build_argparser() -> argparse.ArgumentParser:
                     help="Ray trace fine step size [m] (default 0.25). "
                          "Should be <= DEM grid spacing (0.5m).")
 
-    # Camera position / height corrections
-    ap.add_argument("--img0-e", type=float, default=1734.11)
-    ap.add_argument("--img0-n", type=float, default=2069.00)
-    ap.add_argument("--img1-e", type=float, default=1611.31)
-    ap.add_argument("--img1-n", type=float, default=1849.00)
-    ap.add_argument("--img2-e", type=float, default=1541.90)
-    ap.add_argument("--img2-n", type=float, default=1998.96)
+    # Camera height correction (applied per-image using each image's e/n
+    # from --meta-file, or from DEFAULT_PRMS if --meta-file is omitted)
     ap.add_argument("--set-cam-height", action="store_true", default=True,
                     help="Override u from DEFAULT_PRMS with DEM + cam_height")
     ap.add_argument("--cam-height", type=float, default=1.6,
@@ -157,56 +190,69 @@ def main(argv=None) -> int:
     if not files:
         raise FileNotFoundError(f"No images matched --img-glob: {args.img_glob}")
 
-    meta = {k: dict(v) for k, v in DEFAULT_META.items()}
+    prm_len = len(PRM_ORDER)
+
+    if args.meta_file is not None:
+        print(f"Loading meta/prms from: {args.meta_file}")
+        meta, meta_img_keys, prms_imgs, platform = load_meta_file(args.meta_file)
+        prms_u = np.concatenate([prms_imgs, platform]).astype(dtype_r)
+    else:
+        meta = {k: dict(v) for k, v in DEFAULT_META.items()}
+        meta_img_keys = list(DEFAULT_META.keys())
+        prms_u = np.asarray(DEFAULT_PRMS, dtype=dtype_r)
+
     imgs = [HorizonImage(f, meta, px_smooth=args.px_smooth, px_dist=args.px_dist)
             for f in files]
     imgs = [img for img in imgs if img.key in meta]
     if not imgs:
         raise RuntimeError("No images matched keys in meta after loading HorizonImage objects.")
 
-    if args.no_fit_imgs:
-        fit_imgs, static_imgs = [], imgs
-    else:
-        fit_imgs, static_imgs = imgs, []
+    fit_imgs, static_imgs = imgs, []
     img_keys = [img.key for img in fit_imgs]
-    all_img_keys = [img.key for img in imgs]
 
-    # ── build prms_u ──────────────────────────────────────────────────────────
-    prms_u = np.asarray(DEFAULT_PRMS, dtype=dtype_r)
+    # Any loaded image not represented in prms_u/meta_img_keys can't be placed
+    missing = [k for k in img_keys if k not in meta_img_keys]
+    if missing:
+        raise ValueError(
+            f"Images found with keys not present in meta file: {missing}. "
+            "Add entries for these keys to --meta-file."
+        )
+    # Order fit_imgs/img_keys to match prms_u ordering (meta_img_keys order),
+    # restricted to images actually present on disk.
+    img_keys = [k for k in meta_img_keys if k in img_keys]
+    key_to_img = {img.key: img for img in fit_imgs}
+    fit_imgs = [key_to_img[k] for k in img_keys]
 
-    # Always correct e/n so u is computed at the right location
-    prms_u[0]  = args.img0_e;  prms_u[1]  = args.img0_n
-    prms_u[7]  = args.img1_e;  prms_u[8]  = args.img1_n
-    prms_u[14] = args.img2_e;  prms_u[15] = args.img2_n
+    # If some meta entries have no corresponding file, drop their prms rows
+    # so prms_u stays aligned with img_keys.
+    if len(img_keys) != len(meta_img_keys):
+        keep_idx = [meta_img_keys.index(k) for k in img_keys]
+        rows = [prms_u[i*prm_len:(i+1)*prm_len] for i in keep_idx]
+        platform_tail = prms_u[-3:]
+        prms_u = np.concatenate(rows + [platform_tail]).astype(dtype_r)
 
-    # Report original heights for diagnostics
-    for idx, (e_arg, n_arg, label) in enumerate([
-        (args.img0_e, args.img0_n, "img0"),
-        (args.img1_e, args.img1_n, "img1"),
-        (args.img2_e, args.img2_n, "img2"),
-    ]):
-        u_orig = float(DEFAULT_PRMS[2 + idx * 7])
-        h_orig = u_orig - float(dem.interp_alt(e_arg, n_arg))
-        u_new  = float(dem.interp_alt(e_arg, n_arg)) + args.cam_height
-        print(f"{label}: orig u={u_orig:.2f}  orig h={h_orig:.2f}m  "
+    # Report original heights, then optionally overwrite u with DEM + cam_height
+    for i, k in enumerate(img_keys):
+        e_i = float(prms_u[i*prm_len + 0])
+        n_i = float(prms_u[i*prm_len + 1])
+        u_orig = float(prms_u[i*prm_len + 2])
+        h_orig = u_orig - float(dem.interp_alt(e_i, n_i))
+        u_new  = float(dem.interp_alt(e_i, n_i)) + args.cam_height
+        print(f"{k}: orig u={u_orig:.2f}  orig h={h_orig:.2f}m  "
               f"-> new u={u_new:.2f}  new h={args.cam_height:.2f}m")
+        if args.set_cam_height:
+            prms_u[i*prm_len + 2] = u_new
 
     if args.set_cam_height:
-        prms_u[2]  = float(dem.interp_alt(args.img0_e, args.img0_n)) + args.cam_height
-        prms_u[9]  = float(dem.interp_alt(args.img1_e, args.img1_n)) + args.cam_height
-        prms_u[16] = float(dem.interp_alt(args.img2_e, args.img2_n)) + args.cam_height
         print(f"Camera heights set to {args.cam_height}m above terrain.")
 
     _apply_prms_to_dem_and_meta(
         dem=dem,
         meta=meta,
-        img_keys_in_fit_order=all_img_keys,
+        img_keys_in_fit_order=img_keys,
         prms=prms_u,
         prm_len=len(PRM_ORDER),
     )
-
-    for img in static_imgs:
-        img.set_prms(meta[img.key]["prms"])
 
     # ── build solver ──────────────────────────────────────────────────────────
     ps = PositionSolver(
@@ -242,21 +288,14 @@ def main(argv=None) -> int:
         _param_names = _map["param_names"]
         _map_h       = _map["map_params_h"]
 
-        if args.no_fit_imgs:
-            print("  --no-fit-imgs set: ignoring image entries in MAP file, "
-                  "only ant_e/ant_n/ant_log_h would apply (not overridden here; "
-                  "ant prior centre comes from --img*-e/-n/--cam-height instead).")
-        else:
-            # Override prms_h with MAP values as new prior centres
-            for i, name in enumerate(_param_names):
-                if name in _map_h:
-                    prms_h[i] = dtype_r(_map_h[name])
-            ps.set_mcmc_prms(prms_h)
+        # Override prms_h with MAP values as new prior centres
+        for i, name in enumerate(_param_names):
+            if name in _map_h:
+                prms_h[i] = dtype_r(_map_h[name])
+        ps.set_mcmc_prms(prms_h)
 
         # Override sigmas with Hessian stds where available and finite
-        if args.no_fit_imgs:
-            pass
-        elif _map.get("hess_stds") is not None:
+        if _map.get("hess_stds") is not None:
             _hess      = _map["hess_stds"]
             new_sigmas = list(ps.sigmas)
             for i, name in enumerate(_param_names):
@@ -298,14 +337,13 @@ def main(argv=None) -> int:
         mcmc_prms = ps.get_mcmc_prms()
 
         rng_pm = np.random.default_rng(seed)
-        center = np.asarray(ps.eval_cur_prms(), dtype=dtype_r)  # len == len(mcmc_prms)
 
         initvals = []
         for c in range(args.chains):
             jitter   = rng_pm.normal(0.0,
                                      np.asarray(ps.sigmas) * args.jitter_scaling,
-                                     size=center.size)
-            jittered = center + jitter
+                                     size=prms_h.size)
+            jittered = prms_h + jitter
             ps.set_mcmc_prms(jittered)
             start_c  = ps.eval_cur_prms()
             initvals.append({p.name: v for p, v in zip(mcmc_prms, start_c)})
@@ -333,34 +371,11 @@ def main(argv=None) -> int:
         )
 
     # ── save trace ────────────────────────────────────────────────────────────
-    param_names = [p.name for p in mcmc_prms]
-
-    # ── posterior-mean total logL (rays over ALL images incl. static ones,
-    #    since total_logL's ray loop only covers fit_imgs) ───────────────────
-    theta_h_mean = np.array([trace.posterior[name].values.mean()
-                             for name in param_names], dtype=dtype_r)
-    ps.set_mcmc_prms(theta_h_mean)  # sets fit_imgs prms + ps.ant_pos
-    logL_rays_by_img = {
-        img.key: float(img.horizon_ray_logL(
-            dem, n_rays=args.n_rays, eps=args.eps, fine_delta=args.fine_delta
-        ))
-        for img in imgs
-    }
-    logL_rays = sum(logL_rays_by_img.values())
-    if args.disable_ant:
-        logL_ant = 0.0
-    else:
-        logL_ant = sum(
-            float(img.ant_logL(ps.ant_pos, BOX_SIZE)) for img in ps.imgs
-        )
-    logL_total = logL_rays + args.ant_weight * logL_ant
-    print(f"\nPosterior-mean logL: rays={logL_rays:.2f}  "
-          f"ant={logL_ant:.2f}  total={logL_total:.2f}")
-
     az.to_netcdf(trace, outfile)
 
     # ── summary stats ─────────────────────────────────────────────────────────
     accepted = float(trace.sample_stats.accepted.mean())
+    param_names = [p.name for p in mcmc_prms]
 
     try:
         tuned_scaling = float(step.scaling)
@@ -374,7 +389,7 @@ def main(argv=None) -> int:
         param_summary[name] = {
             "mean":           float(arr.mean()),
             "std":            float(arr.std()),
-            "prior_mu":       float(center[i]),
+            "prior_mu":       float(prms_h[i]),
             "prior_sigma":    prior_sigma,
             "effective_step": float(tuned_scaling * prior_sigma),
         }
@@ -421,12 +436,6 @@ def main(argv=None) -> int:
             "set_cam_height": args.set_cam_height,
         },
         "param_summary": param_summary,
-        "posterior_mean_logL": {
-            "rays_by_img": logL_rays_by_img,
-            "rays_total":  logL_rays,
-            "ant":         logL_ant,
-            "total":       logL_total,
-        },
     }
 
     with open(metafile, "w") as f:
@@ -436,8 +445,6 @@ def main(argv=None) -> int:
     print(f"\n{'='*50}")
     print(f"Accepted step fraction = {accepted:.3f}")
     print(f"Tuned scaling          = {tuned_scaling:.6f}")
-    print(f"Posterior-mean logL    = {logL_total:.2f} "
-          f"(rays={logL_rays:.2f}, ant={logL_ant:.2f})")
     print(f"Trace written to:        {outfile}")
     print(f"Metadata written to:     {metafile}")
     print(f"{'='*50}")
