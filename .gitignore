@@ -41,3 +41,4 @@ trace_img*_seed*.nc
 trace_img*_seed*_meta.json
 plots_seed*/
 plots_manual/
+*runs/
