@@ -25,19 +25,53 @@ from eigsep_terrain.img import HorizonImage, PositionSolver, PRM_ORDER, dtype_r
 
 BOX_SIZE = 0.3  # m
 
-# Fallback (used only if --meta-file is not given) — original 3-image deployment.
+# Fallback (used only if --meta-file is not given) — 2026 deployment,
+# matching tune_image.py / fit_image.py / plot_image_fit.py.
 DEFAULT_META = {
-    "0817": {"ant_px": (2 * 1366, 2 * 1221)},
-    "0833": {"ant_px": (1606, 2700)},
-    "0860": {"ant_px": (2924, 1945)},
+    '2209' : {"ant_px": (2146, 232)},
+    '2210' : {"ant_px": (1362, 137)},
+    '2211' : {"ant_px": (1785, 505)},
+    '2213' : {"ant_px": (1117, 549)},
+    '2214' : {"ant_px": (1206, 300)},
+    '2215' : {"ant_px": (2469, 1411)},
+    '2216' : {"ant_px": (2606, 719)},
+    '2217' : {"ant_px": (2228, 912)},
+    '2218' : {"ant_px": (2711, 919)},
+    '2219' : {"ant_px": (1626, 1082)},
+    '2220' : {"ant_px": (1580, 166)},
+    '2221' : {"ant_px": (2278, 790)},
+    '2222' : {"ant_px": (1020, 720)},
+    '2223' : {"ant_px": (1439, 758)},
+    '2224' : {"ant_px": (799, 744)},
+    '2225' : {"ant_px": (1959, 1116)},
+    '2226' : {"ant_px": (3207, 364)},
+    '2227' : {"ant_px": (2719, 930)},
+    '2228' : {"ant_px": (1693, 786)},
+    '2229' : {"ant_px": (2759, 706)},
+    '2230' : {"ant_px": (3295, 744)},
+    '2231' : {"ant_px": (3476, 338)},
+    '2232' : {"ant_px": (2318, 454)},
+    '2233' : {"ant_px": (3092, 982)},
+    '2234' : {"ant_px": (2405, 1161)},
+    '2235' : {"ant_px": (2234, 464)},
+    '2236' : {"ant_px": (2562, 1208)},
+    '2237' : {"ant_px": (1935, 646)},
+    '2238' : {"ant_px": (2131, 1032)},
+    '2239' : {"ant_px": (2436, 271)},
+    '2241' : {"ant_px": (1652, 877)},
+    '2242' : {"ant_px": (1917, 483)},
+    '2243' : {"ant_px": (2087, 528)},
+    '2245' : {"ant_px": (2294, 902)},
 }
 
-DEFAULT_PRMS = (
-    1734.11, 2069.00, 1760.97, 1.4706, 3.6932, -0.0493, 9830.11,
-    1611.31, 1849.00, 1659.78, 1.2053, 1.2414, -0.0244, 5081.08,
-    1541.90, 1998.96, 1765.06, 1.5412, 0.6147, 0.1585, 2328.64,
-    1651.83, 2024.17, 1781.46,
-)
+# Per-image (e, n, u, th, ph, ti, f), same starting values as
+# tune_image.py's DEFAULT_PRMS_U_BY_KEY, flattened in DEFAULT_META key
+# order, with a placeholder platform (antenna) prior appended as the
+# final 3 values.
+DEFAULT_PRMS = tuple(
+    v for k in DEFAULT_META
+    for v in (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0)
+) + (1600.0, 2000.0, 1600.0)  # platform e, n, u placeholder
 
 
 def load_meta_file(path: str):
@@ -103,7 +137,7 @@ def build_argparser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache-file", default="marjum_dem.npz")
     ap.add_argument("--img-glob",
-                    default="/Users/komalkaur/Desktop/eigsep_stuff/hrzn_mapping/imgs/IMG*.jpg")
+                    default="/Users/komalkaur/Desktop/eigsep_stuff/eigsep_terrain/2026_imgs/*.jpg")
     ap.add_argument("--seed", type=int, default=None,
                     help="Defaults to random [0,999]")
     ap.add_argument("--meta-file", default=None,

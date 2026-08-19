@@ -6,6 +6,18 @@ independently, using only the horizon-ray likelihood (no antenna term).
 Reuses PositionSolver (img.py) for all u<->log_h conversion and likelihood
 logic instead of reimplementing it: fit_imgs=[img], disable_ant=True.
 
+Supports an arbitrary number of images via --meta-file (same JSON format
+used by eigsep_terrain_pymc.py):
+{
+  "images": {
+    "<key>": {"ant_px": [x, y], "e":.., "n":.., "u":.., "th":.., "ph":.., "ti":.., "f":..},
+    ...
+  },
+  "platform": [e, n, u]   # optional, unused here (ant term disabled)
+}
+If --meta-file is omitted, falls back to the hardcoded 3-image
+DEFAULT_META/DEFAULT_PRMS_U_BY_KEY below.
+
 Outputs:
   trace_img{KEY}_seed{NNN}.nc         ArviZ InferenceData
   trace_img{KEY}_seed{NNN}_meta.json  metadata (args, seed, param names, priors)
@@ -31,24 +43,105 @@ from eigsep_terrain.img import HorizonImage, PositionSolver, PRM_ORDER, dtype_r
 
 BOX_SIZE = 0.3  # m, unused (ant term disabled) but required by PositionSolver
 
+# Fallback (used only if --meta-file is not given) — 2026 deployment.
 DEFAULT_META = {
-    "0817": {"ant_px": (2 * 1366, 2 * 1221)},
-    "0833": {"ant_px": (1606, 2700)},
-    "0860": {"ant_px": (2924, 1945)},
+    '2209' : {"ant_px": (2146, 232)},
+    '2210' : {"ant_px": (1362, 137)},
+    '2211' : {"ant_px": (1785, 505)},
+    '2213' : {"ant_px": (1117, 549)},
+    '2214' : {"ant_px": (1206, 300)},
+    '2215' : {"ant_px": (2469, 1411)},
+    '2216' : {"ant_px": (2606, 719)},
+    '2217' : {"ant_px": (2228, 912)},
+    '2218' : {"ant_px": (2711, 919)},
+    '2219' : {"ant_px": (1626, 1082)},
+    '2220' : {"ant_px": (1580, 166)},
+    '2221' : {"ant_px": (2278, 790)},
+    '2222' : {"ant_px": (1020, 720)},
+    '2223' : {"ant_px": (1439, 758)},
+    '2224' : {"ant_px": (799, 744)},
+    '2225' : {"ant_px": (1959, 1116)},
+    '2226' : {"ant_px": (3207, 364)},
+    '2227' : {"ant_px": (2719, 930)},
+    '2228' : {"ant_px": (1693, 786)},
+    '2229' : {"ant_px": (2759, 706)},
+    '2230' : {"ant_px": (3295, 744)},
+    '2231' : {"ant_px": (3476, 338)},
+    '2232' : {"ant_px": (2318, 454)},
+    '2233' : {"ant_px": (3092, 982)},
+    '2234' : {"ant_px": (2405, 1161)},
+    '2235' : {"ant_px": (2234, 464)},
+    '2236' : {"ant_px": (2562, 1208)},
+    '2237' : {"ant_px": (1935, 646)},
+    '2238' : {"ant_px": (2131, 1032)},
+    '2239' : {"ant_px": (2436, 271)},
+    '2241' : {"ant_px": (1652, 877)},
+    '2242' : {"ant_px": (1917, 483)},
+    '2243' : {"ant_px": (2087, 528)},
+    '2245' : {"ant_px": (2294, 902)},
 }
-IMG_KEYS = list(DEFAULT_META.keys())  # index 0,1,2 -> key
-
-IMG_GLOB = "/Users/komalkaur/Desktop/eigsep_stuff/hrzn_mapping/imgs/IMG*.jpg"
+IMG_KEYS = list(DEFAULT_META.keys())  # index 0..N-1 -> key
 
 DEFAULT_PRMS_U_BY_KEY = {
-    "0817": (1734.11, 2069.00, 1760.97, 1.4706, 3.6932, -0.0493, 9830.11),
-    "0833": (1611.31, 1849.00, 1659.78, 1.2053, 1.2414, -0.0244, 5081.08),
-    "0860": (1541.90, 1998.96, 1765.06, 1.5412, 0.6147, 0.1585, 2328.64),
+    '2209' : (1615.1758, 2042.9487, 1704.5879, 0.85, 0.8766, 0.0004, 2181.3187),
+    '2210' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2211' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2213' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2214' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2215' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2216' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2217' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2218' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2219' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2220' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2221' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2222' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2223' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2224' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2225' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2226' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2227' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2228' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2229' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2230' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2231' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2232' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2233' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2234' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2235' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2236' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2237' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2238' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2239' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2241' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2242' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2243' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
+    '2245' : (1600.0, 2000.0, 1600.0, 1.5, 1.0, 0.0, 5000.0),
 }
+DEFAULT_IMG_GLOB = "/Users/komalkaur/Desktop/eigsep_stuff/eigsep_terrain/2026_imgs/*.jpg"
 
 
-def find_img_file(which: int, img_glob: str) -> str:
-    key = IMG_KEYS[which]
+def load_meta_file(path: str):
+    """Load a JSON meta file describing an arbitrary number of images.
+
+    Returns (meta, keys, prms_u_by_key) where:
+      meta          : {key: {"ant_px": (x, y)}}
+      keys          : list of keys, in file order
+      prms_u_by_key : {key: (e, n, u, th, ph, ti, f)}
+    """
+    with open(path) as f:
+        raw = json.load(f)
+
+    images = raw["images"]
+    keys = list(images.keys())
+    meta = {k: {"ant_px": tuple(images[k]["ant_px"])} for k in keys}
+    prms_u_by_key = {
+        k: tuple(float(images[k][p]) for p in PRM_ORDER) for k in keys
+    }
+    return meta, keys, prms_u_by_key
+
+
+def find_img_file(key: str, img_glob: str) -> str:
     files = sorted(glob.glob(img_glob))
     matches = [f for f in files if os.path.basename(f).split("_")[-1].split(".")[0] == key]
     if not matches:
@@ -60,11 +153,17 @@ def find_img_file(which: int, img_glob: str) -> str:
 
 def build_argparser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--which", type=int, required=True, nargs="+", choices=[0, 1, 2],
-                    help="Which image(s) to fit: 0=%s, 1=%s, 2=%s. "
-                         "Pass multiple (e.g. --which 0 1 2) to fit them in "
-                         "parallel, independent subprocesses." % tuple(IMG_KEYS))
-    ap.add_argument("--img-glob", default=IMG_GLOB)
+    ap.add_argument("--meta-file", default=None,
+                    help="JSON file describing an arbitrary number of images "
+                         "(key, ant_px, e/n/u/th/ph/ti/f). If omitted, falls "
+                         "back to the hardcoded 3-image DEFAULT_META/"
+                         "DEFAULT_PRMS_U_BY_KEY.")
+    ap.add_argument("--which", type=int, required=True, nargs="+",
+                    help="Which image(s) to fit, by index into the ordered "
+                         "list of meta keys (0-based; matches tune_image.py's "
+                         "--which). Pass multiple (e.g. --which 0 1 2) to fit "
+                         "them in parallel, independent subprocesses.")
+    ap.add_argument("--img-glob", default=DEFAULT_IMG_GLOB)
     ap.add_argument("--cache-file", default="marjum_dem.npz")
     ap.add_argument("--seed", type=int, default=None)
 
@@ -104,7 +203,22 @@ def build_argparser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = build_argparser().parse_args(argv)
 
-    if len(args.which) > 1:
+    if args.meta_file is not None:
+        meta_all, valid_keys, prms_u_by_key = load_meta_file(args.meta_file)
+    else:
+        meta_all = {k: dict(v) for k, v in DEFAULT_META.items()}
+        valid_keys = IMG_KEYS
+        prms_u_by_key = DEFAULT_PRMS_U_BY_KEY
+
+    bad_idx = [w for w in args.which if w < 0 or w >= len(valid_keys)]
+    if bad_idx:
+        raise ValueError(
+            f"--which index(es) {bad_idx} out of range "
+            f"(0..{len(valid_keys)-1}, {len(valid_keys)} images available)."
+        )
+    which_keys = [valid_keys[w] for w in args.which]
+
+    if len(which_keys) > 1:
         raw = argv if argv is not None else sys.argv[1:]
         procs = []
         for w in args.which:
@@ -118,19 +232,18 @@ def main(argv=None) -> int:
             rc = rc or p.returncode
         return rc
 
-    args.which = args.which[0]
+    key = which_keys[0]
 
     seed = args.seed if args.seed is not None else int(np.random.randint(1000))
     np.random.seed(seed)
 
-    img_file = find_img_file(args.which, args.img_glob)
+    img_file = find_img_file(key, args.img_glob)
     dem = DEM(cache_file=args.cache_file)
 
-    meta = {k: dict(v) for k, v in DEFAULT_META.items()}
+    meta = {k: dict(v) for k, v in meta_all.items()}
     img = HorizonImage(img_file, meta, px_smooth=args.px_smooth, px_dist=args.px_dist)
-    key = img.key
-    if key not in DEFAULT_META:
-        raise ValueError(f"Image key {key!r} not in DEFAULT_META {list(DEFAULT_META)}")
+    if img.key != key:
+        raise ValueError(f"Loaded image key {img.key!r} does not match requested {key!r}")
 
     stem = f"trace_img{key}_seed{seed:03d}"
     outfile = f"{stem}.nc"
@@ -142,7 +255,7 @@ def main(argv=None) -> int:
     assert not os.path.exists(outfile), \
         f"{outfile} already exists; choose a different seed."
 
-    prms_u = np.asarray(DEFAULT_PRMS_U_BY_KEY[key], dtype=dtype_r)
+    prms_u = np.asarray(prms_u_by_key[key], dtype=dtype_r)
     e0 = args.e if args.e is not None else prms_u[0]
     n0 = args.n if args.n is not None else prms_u[1]
     prms_u[0], prms_u[1] = e0, n0
