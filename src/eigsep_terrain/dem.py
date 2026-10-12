@@ -404,12 +404,11 @@ class DEM(dict):
             bmin = az_min[ni, ei]
             bmax = az_max[ni, ei]
             h = hor_ang[ni, ei]
-            if bmin < bmax:
-                slices = [slice(bmin, bmax)]
-            elif bmin == bmax:
-                slices = [slice(bmin, bmin+1)]
+            # bmax is the last bin the pixel touches, so include it
+            if bmin <= bmax:
+                slices = [slice(bmin, bmax+1)]
             else:
-                slices = [slice(bmin, None), slice(0, bmax)]
+                slices = [slice(bmin, None), slice(0, bmax+1)]
             if len(imp) == 1:
                 # base case
                 for s in slices:

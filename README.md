@@ -26,8 +26,11 @@ metres retain the projection scale factor; they are not exact ground
 metres. Observer convergence approximates bearings across the local DEM.
 
 Horizon bins hold conservative maxima over pixels touching each bin,
-not point samples. Prefer `n_az >= 1440` when interpolating a horizon,
-and record `azimuth_frame` alongside saved horizon/ray products.
+not point samples. Earlier versions skipped the last bin each pixel
+touched, so horizons from them, including those made after the UTM
+change, need recomputation too. Prefer `n_az >= 1440` when
+interpolating a horizon, and record `azimuth_frame` alongside saved
+horizon/ray products.
 Previously saved horizons, camera fits and raster positions need
 recomputation. Pre-UTM DEM caches raise an error, including with
 `clear_cache=True`, so opening a pinned product cannot silently replace it.
